@@ -24,7 +24,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -1067,7 +1067,7 @@ class App(tk.Tk):
         self.update_text.configure(text=f"Hay una versión nueva: {tag}")
         self.update_button.configure(
             text="Actualizar" if can_self_update(release) else "Descargar")
-        self.update_bar.pack(fill="x", pady=(0, 10), before=self.body)
+        self.update_bar.pack(fill="x", pady=(0, 10), before=self.pages)
         if self.tray:
             self.tray.update_available(tag)
 
