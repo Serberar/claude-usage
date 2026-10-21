@@ -24,7 +24,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -863,6 +863,10 @@ class App(tk.Tk):
                  font=(FONT, 9, "bold")).pack(side="left")
         tk.Label(footer, text=f"v{VERSION}", bg=BG, fg=MUTED,
                  font=(FONT, 9)).pack(side="right")
+        self.check_link = tk.Label(footer, text="Buscar actualizaciones ·", bg=BG, fg=MUTED,
+                                   font=(FONT, 9, "underline"), cursor="hand2")
+        self.check_link.pack(side="right", padx=(0, 4))
+        self.check_link.bind("<Button-1>", lambda _e: self.check_now())
 
         self.tray = Tray(self) if pystray else None
         if self.tray:
@@ -1036,6 +1040,24 @@ class App(tk.Tk):
     def check_for_update(self):
         self.after(UPDATE_CHECK_MS, self.check_for_update)
         self.run_in_background(fetch_newer_release, self.on_release)
+
+    def check_now(self):
+        if self.check_link.cget("text") == "Buscando… ·":
+            return
+        self.check_link.configure(text="Buscando… ·")
+
+        def done(release, error):
+            if error:
+                text = "Sin conexión ·"
+            elif release or self.release:
+                text = "Hay versión nueva ·"
+            else:
+                text = "✔ Estás al día ·"
+            self.check_link.configure(text=text)
+            self.after(5000, lambda: self.check_link.configure(text="Buscar actualizaciones ·"))
+            self.on_release(release, error)
+
+        self.run_in_background(fetch_newer_release, done)
 
     def on_release(self, release, error):
         if error or not release or self.release:
