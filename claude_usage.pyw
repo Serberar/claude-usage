@@ -24,7 +24,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss

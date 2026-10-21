@@ -68,6 +68,10 @@ def run(args, log=quiet, timeout=900, answer=None, ok_codes=(0,)):
     exe = find(args[0]) or args[0]
     log(f"> {' '.join(args)}")
     env = dict(os.environ, PYTHONIOENCODING="utf-8", NO_COLOR="1")
+    # abierta desde PowerShell 7 hereda sus rutas de módulos: el PowerShell de Windows no
+    # carga los suyos y comandos como Get-FileHash (los usa el instalador de Claude) no existen
+    if Path(exe).stem.lower() == "powershell":
+        env = {k: v for k, v in env.items() if k.upper() != "PSMODULEPATH"}
     try:
         proc = subprocess.run(
             [exe, *args[1:]], capture_output=True, text=True, encoding="utf-8",
