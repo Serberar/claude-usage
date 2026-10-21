@@ -43,6 +43,9 @@ Name: "{autodesktop}\Claude Usage"; Filename: "{app}\ClaudeUsage.exe"; Tasks: de
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
   ValueName: "ClaudeUsage"; ValueData: """{app}\ClaudeUsage.exe"" --tray"; \
   Tasks: startup; Flags: uninsdeletevalue
+; la casilla de la app crea el mismo valor: se borra al desinstalar aunque no lo creara el instalador
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; \
+  ValueName: "ClaudeUsage"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\ClaudeUsage.exe"; Description: "Abrir Claude Usage"; \
