@@ -51,6 +51,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\ClaudeUsage.exe"; Description: "Abrir Claude Usage"; \
   Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; suele estar abierta en la bandeja: sin cerrarla no se puede borrar el .exe
+Filename: "{sys}\taskkill.exe"; Parameters: "/IM ClaudeUsage.exe /F"; Flags: runhidden; \
+  RunOnceId: "CerrarClaudeUsage"
+
 [UninstallDelete]
 ; restos de las actualizaciones automáticas
 Type: files; Name: "{app}\ClaudeUsage.old.exe"
