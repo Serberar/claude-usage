@@ -26,7 +26,9 @@ Todo se maneja desde la propia ventana, sin terminal:
 
 ## Uso
 
-Descarga `ClaudeUsage.exe` desde [Releases](../../releases) y ábrelo. No hace falta instalar Python.
+Descarga `ClaudeUsage-Setup.exe` desde [Releases](../../releases) y ábrelo. Se instala solo para tu usuario, sin permisos de administrador, y queda en el menú Inicio. No hace falta instalar Python. Se desinstala desde Configuración de Windows.
+
+Si prefieres no instalarla, `ClaudeUsage.exe` es la versión portable: se abre tal cual.
 
 Para que se abra sola al encender el ordenador, marca **Abrir al iniciar Windows** abajo en la ventana: arrancará directamente en la bandeja.
 
@@ -39,15 +41,24 @@ pythonw claude_usage.pyw
 
 Sin `pystray` y `Pillow` funciona igual, pero sin el icono de la bandeja.
 
-## Compilar el .exe
+## Pruebas
+
+```
+python test_setup_tools.py
+```
+
+## Compilar el .exe y el instalador
+
+Hace falta [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`).
 
 ```
 pip install pyinstaller -r requirements.txt
-python make_icon.py
-pyinstaller --noconfirm --onefile --windowed --name ClaudeUsage --icon claude_usage.ico --add-data "claude_usage.ico;." --hidden-import pystray._win32 claude_usage.pyw
+.\build.ps1
 ```
 
-El ejecutable queda en `dist/ClaudeUsage.exe`. Para publicar una versión, sube `VERSION` en `claude_usage.pyw` y crea una release con la etiqueta `vX.Y.Z` y el `ClaudeUsage.exe` adjunto: las copias instaladas la verán y se actualizarán solas.
+Deja `dist/ClaudeUsage.exe` y `dist/ClaudeUsage-Setup.exe` con la versión que pone `VERSION` en `claude_usage.pyw`.
+
+Para publicar una versión: sube `VERSION`, ejecuta `.\build.ps1` y crea una release con la etiqueta `vX.Y.Z` y **los dos archivos** adjuntos. Las copias instaladas la verán y se actualizarán solas (usan `ClaudeUsage.exe`; el instalador es para quien la instala por primera vez).
 
 ---
 

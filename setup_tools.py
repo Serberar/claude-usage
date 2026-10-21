@@ -81,7 +81,8 @@ def run(args, log=quiet, timeout=900, answer=None, ok_codes=(0,)):
     for line in (proc.stdout + proc.stderr).strip().splitlines()[-12:]:
         log("  " + line)
     if proc.returncode not in ok_codes:
-        raise StepError(f"{args[0]} falló (código {proc.returncode})")
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        raise StepError(detail[-1] if detail else f"{args[0]} falló (código {proc.returncode})")
     return proc.stdout
 
 
@@ -214,21 +215,26 @@ def mark_changed():
     save_state(last_change=time.time())
 
 
-def claude_start_times():
-    """Cuándo se abrió cada sesión de Claude Code que sigue abierta (segundos Unix)."""
+def claude_sessions():
+    """(PID, cuándo se abrió en segundos Unix) de cada sesión de Claude Code abierta.
+
+    Si Windows no deja leer la hora de inicio, cuenta como 0 (abierta desde siempre).
+    """
     script = ("Get-Process claude -ErrorAction SilentlyContinue | ForEach-Object { "
-              "try { [DateTimeOffset]::new($_.StartTime).ToUnixTimeSeconds() } catch {} }")
+              "$t = try { [DateTimeOffset]::new($_.StartTime).ToUnixTimeSeconds() } catch { 0 }; "
+              "\"$($_.Id) $t\" }")
     try:
         out = run(["powershell", "-NoProfile", "-Command", script], timeout=30)
     except StepError:
         return []
-    return [int(line) for line in out.split() if line.strip().isdigit()]
+    return [tuple(map(int, line.split())) for line in out.splitlines()
+            if re.fullmatch(r"\d+ \d+", line.strip())]
 
 
 def restart_needed():
     """Hay alguna sesión de Claude Code abierta desde antes del último cambio."""
     changed = load_state().get("last_change")
-    return bool(changed) and any(start < changed for start in claude_start_times())
+    return bool(changed) and any(start < changed for _pid, start in claude_sessions())
 
 
 def autostart_command():
@@ -261,24 +267,14 @@ def set_autostart(enabled):
                 pass
 
 
-def claude_processes():
-    """PIDs de las sesiones de Claude Code abiertas (terminal o VS Code)."""
-    try:
-        out = run(["tasklist", "/FI", "IMAGENAME eq claude.exe", "/FO", "CSV", "/NH"],
-                  timeout=15)
-    except StepError:
-        return []
-    return [line.split('","')[1] for line in out.splitlines() if line.startswith('"claude')]
-
-
 def close_claude(log):
     """Cierra Claude Code para que al abrirlo de nuevo cargue plugins, hooks y CLAUDE.md."""
-    pids = claude_processes()
-    if not pids:
+    sessions = claude_sessions()
+    if not sessions:
         log("No había ninguna sesión de Claude Code abierta.")
-    for pid in pids:
+    for pid, _start in sessions:
         try:
-            run(["taskkill", "/PID", pid, "/T", "/F"], log)
+            run(["taskkill", "/PID", str(pid), "/T", "/F"], log)
         except StepError:
             pass  # ya se había cerrado
     log("Vuelve a abrir Claude Code: en VS Code abre otra vez su panel y en la terminal "
@@ -313,7 +309,7 @@ class Tool:
     """
 
     def __init__(self, name, description, priority, pros, cons, saving=None,
-                 quality_risk=False):
+                 quality_risk=False, has_options=False):
         self.name = name
         self.description = description
         self.priority = priority
@@ -321,6 +317,7 @@ class Tool:
         self.cons = cons
         self.saving = saving
         self.quality_risk = quality_risk
+        self.has_options = has_options
 
 
 class Plugin(Tool):
@@ -424,7 +421,8 @@ class ClaudeMdRules(Tool):
 
     def claude_md_lines(self):
         try:
-            return (CLAUDE_DIR / "CLAUDE.md").read_text(encoding="utf-8").splitlines()
+            return (CLAUDE_DIR / "CLAUDE.md").read_text(
+                encoding="utf-8", errors="surrogateescape").splitlines()
         except FileNotFoundError:
             return []
 
@@ -461,7 +459,8 @@ class ClaudeMdRules(Tool):
         if enabled:
             lines.append(self.line)
         CLAUDE_DIR.mkdir(exist_ok=True)
-        (CLAUDE_DIR / "CLAUDE.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (CLAUDE_DIR / "CLAUDE.md").write_text("\n".join(lines) + "\n", encoding="utf-8",
+                                              errors="surrogateescape")
         log(f"> {'añadido' if enabled else 'quitado'} {self.line} en CLAUDE.md")
 
 
@@ -473,7 +472,7 @@ TOOLS = [
              "coste por tarea. Menos código que revisar.",
         cons="En Windows hay un fallo conocido que puede dejar cada mensaje parado unos "
              "segundos. Ahorra menos de lo que anuncia (20 %).",
-        saving=0.10, quality_risk=True,
+        saving=0.10, quality_risk=True, has_options=True,
     ),
     Plugin(
         "caveman@caveman", "JuliusBrussee/caveman", name="Caveman", priority="Alta",
@@ -520,6 +519,44 @@ TOOLS = [
         saving=0.0,
     ),
 ]
+
+
+PONYTAIL_LEVELS = ["off", "lite", "full", "ultra"]
+PONYTAIL_CONFIG = Path(os.environ.get("APPDATA", Path.home())) / "ponytail" / "config.json"
+PONYTAIL_BAND = CLAUDE_DIR / ".ponytail-band"  # con "off" dentro, Ponytail no enseña su barra
+
+
+def ponytail_level():
+    """Nivel con el que Ponytail empieza cada sesión (defaultMode de su config.json)."""
+    try:
+        level = json.loads(PONYTAIL_CONFIG.read_text(encoding="utf-8")).get("defaultMode")
+    except (OSError, ValueError):
+        level = None
+    return level if level in PONYTAIL_LEVELS else "full"
+
+
+def set_ponytail_level(level):
+    try:
+        config = json.loads(PONYTAIL_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        config = {}
+    config["defaultMode"] = level
+    PONYTAIL_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    PONYTAIL_CONFIG.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
+def ponytail_band_visible():
+    try:
+        return PONYTAIL_BAND.read_text(encoding="utf-8").strip() != "off"
+    except OSError:
+        return True
+
+
+def set_ponytail_band(visible):
+    if visible:
+        PONYTAIL_BAND.unlink(missing_ok=True)
+    else:
+        PONYTAIL_BAND.write_text("off", encoding="utf-8")
 
 
 def estimated_spend(tools_enabled):

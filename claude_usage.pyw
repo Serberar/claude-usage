@@ -24,7 +24,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -49,9 +49,6 @@ FONT = "Segoe UI"
 
 DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
-
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
 
 def listen_for_other_instances():
     """Ocupa el puerto de la app; devuelve None si ya lo tiene otra instancia."""
@@ -95,29 +92,31 @@ def fetch_newer_release():
     return release
 
 
-def exe_asset_url(release):
+def exe_asset(release):
     for asset in release.get("assets", []):
         if asset.get("name", "").lower() == "claudeusage.exe":
-            return asset.get("browser_download_url")
+            return asset
     return None
 
 
 def can_self_update(release):
     """Solo el .exe compilado se puede reemplazar a sí mismo."""
-    return getattr(sys, "frozen", False) and exe_asset_url(release) is not None
+    return getattr(sys, "frozen", False) and exe_asset(release) is not None
 
 
 def download_update(release):
     """Descarga el .exe nuevo junto al actual (ClaudeUsage.new.exe)."""
     current = Path(sys.executable)
     new = current.with_name(current.stem + ".new.exe")
-    with github_request(exe_asset_url(release), 300) as resp, open(new, "wb") as out:
+    asset = exe_asset(release)
+    with github_request(asset["browser_download_url"], 300) as resp, open(new, "wb") as out:
         shutil.copyfileobj(resp, out)
+    # urllib no avisa si la conexión se corta a mitad: se comprueba el tamaño
     with open(new, "rb") as f:
-        valid = f.read(2) == b"MZ"
+        valid = f.read(2) == b"MZ" and new.stat().st_size == asset.get("size")
     if not valid:
         new.unlink()
-        raise RuntimeError("la descarga no es un ejecutable válido")
+        raise RuntimeError("la descarga llegó incompleta; vuelve a intentarlo")
     return new
 
 
@@ -140,8 +139,11 @@ def sync_installed_version():
     try:
         import winreg
         key = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{{{INSTALLER_ID}}}_is1"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as handle:
-            winreg.SetValueEx(handle, "DisplayVersion", 0, winreg.REG_SZ, VERSION)
+        access = winreg.KEY_READ | winreg.KEY_SET_VALUE
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, access) as handle:
+            folder = winreg.QueryValueEx(handle, "InstallLocation")[0]
+            if Path(sys.executable).parent == Path(folder):  # no un .exe portable suelto
+                winreg.SetValueEx(handle, "DisplayVersion", 0, winreg.REG_SZ, VERSION)
     except OSError:  # no está instalada (o no es Windows)
         pass
 
@@ -159,17 +161,9 @@ def remove_update_leftovers():
 
 
 def run_cswap(*args):
-    exe = setup_tools.find("cswap")
-    if not exe:
+    if not setup_tools.find("cswap"):
         raise RuntimeError("Falta claude-swap: instálalo desde la pestaña Cuentas.")
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", NO_COLOR="1")
-    proc = subprocess.run(
-        [exe, *args], capture_output=True, text=True, encoding="utf-8",
-        errors="replace", timeout=60, creationflags=NO_WINDOW, env=env,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout).strip() or "cswap falló")
-    return proc.stdout
+    return setup_tools.run(["cswap", *args], timeout=60)
 
 
 def color_for(used):
@@ -690,7 +684,8 @@ class PluginsPage(tk.Frame):
                      font=(FONT, 9, "bold")).pack(side="right")
             buttons = tk.Frame(bottom, bg=CARD)
             buttons.pack(side="left")
-            self.cards.append((tool, state, buttons))
+            options = tk.Frame(card, bg=CARD)
+            self.cards.append((tool, state, buttons, options))
         # solo se enseña cuando hay cambios que Claude Code aún no ha cargado
         self.restart_note = tk.Frame(self, bg=CARD_ACTIVE, padx=14, pady=10)
         make_button(self.restart_note, "Reiniciar Claude Code", self.restart_claude,
@@ -719,13 +714,17 @@ class PluginsPage(tk.Frame):
             where = {"before": self.log} if self.log.winfo_manager() else {}
             self.restart_note.pack(fill="x", pady=(0, 8), **where)
         self.spend.draw(setup_tools.estimated_spend(
-            tool for (tool, _s, _b), status in zip(self.cards, statuses)
+            tool for (tool, _s, _b, _o), status in zip(self.cards, statuses)
             if status == "enabled"))
-        for (tool, state, buttons), status in zip(self.cards, statuses):
+        for (tool, state, buttons, options), status in zip(self.cards, statuses):
             text, color = self.LABELS[status]
             state.configure(text=text, fg=color)
-            for child in buttons.winfo_children():
+            for child in buttons.winfo_children() + options.winfo_children():
                 child.destroy()
+            options.pack_forget()
+            if tool.has_options and status != "missing":
+                self.ponytail_options(options)
+                options.pack(fill="x", pady=(10, 0))
             if status == "missing":
                 make_button(buttons, "Instalar", lambda t=tool: self.install(t),
                             primary=True).pack(side="left")
@@ -738,6 +737,33 @@ class PluginsPage(tk.Frame):
                         lambda t=tool: self.update(t)).pack(side="left", padx=(6, 0))
             make_button(buttons, "Desinstalar",
                         lambda t=tool: self.uninstall(t)).pack(side="left", padx=(6, 0))
+
+    def ponytail_options(self, frame):
+        """Nivel con el que empieza cada sesión y si se ve su barra en Claude Code."""
+        row = tk.Frame(frame, bg=CARD)
+        row.pack(fill="x")
+        tk.Label(row, text="Nivel", bg=CARD, fg=MUTED, font=(FONT, 9, "bold"), width=6,
+                 anchor="w").pack(side="left")
+        current = setup_tools.ponytail_level()
+        for level in setup_tools.PONYTAIL_LEVELS:
+            make_button(row, level, lambda lv=level: self.set_ponytail(level=lv),
+                        primary=level == current).pack(side="left", padx=(0, 4))
+        band = tk.BooleanVar(value=setup_tools.ponytail_band_visible())
+        tk.Checkbutton(frame, text="Mostrar su barra en Claude Code", variable=band,
+                       command=lambda: self.set_ponytail(band=band.get()), bg=CARD, fg=MUTED,
+                       selectcolor=BG, activebackground=CARD, activeforeground=TEXT,
+                       font=(FONT, 9), highlightthickness=0, bd=0,
+                       cursor="hand2").pack(anchor="w", pady=(6, 0))
+
+    def set_ponytail(self, level=None, band=None):
+        def work(log):
+            if level is not None:
+                setup_tools.set_ponytail_level(level)
+                log(f"> nivel de Ponytail: {level}")
+            if band is not None:
+                setup_tools.set_ponytail_band(band)
+                log(f"> barra de Ponytail: {'visible' if band else 'oculta'}")
+        self.task("Cambiando las opciones de Ponytail…", work)
 
     def task(self, title, work, changes=True):
         def run(log):
@@ -769,7 +795,7 @@ class PluginsPage(tk.Frame):
         self.task(f"{verb} {tool.name}…", lambda log: tool.set_enabled(enabled, log))
 
     def restart_claude(self):
-        count = len(setup_tools.claude_processes())
+        count = len(setup_tools.claude_sessions())
         sessions = "la sesión" if count == 1 else f"las {count} sesiones"
         if count and not messagebox.askyesno(
                 "Reiniciar Claude Code",
@@ -1018,7 +1044,10 @@ class App(tk.Tk):
             text=f"Actualizado {datetime.now():%H:%M} · se refresca cada minuto", fg=MUTED)
 
     def switch_to(self, number):
-        if number is None or self.busy:
+        if number is None:
+            return
+        if self.busy:  # se está refrescando: se cambia de cuenta en cuanto acabe
+            self.after(500, lambda: self.switch_to(number))
             return
         self.busy = True
         self.status.configure(text=f"Cambiando a la cuenta {number}…", fg=MUTED)
