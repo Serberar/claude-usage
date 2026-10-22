@@ -16,15 +16,17 @@ import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
+import customtkinter as ctk
+from PIL import Image, ImageDraw, ImageFont
+
 import setup_tools
 
 try:
     import pystray
-    from PIL import Image, ImageDraw, ImageFont
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.1.5"
+VERSION = "1.2.0"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -34,21 +36,33 @@ TICK_MS = 30_000         # cada cuánto se recalculan las cuentas atrás
 INSTANCE_PORT = 47821    # puerto local con el que la app detecta si ya está abierta
 UPDATE_CHECK_MS = 6 * 3600_000  # cada cuánto se mira si hay versión nueva
 
-BG = "#0f1115"
-CARD = "#1a1d24"
-CARD_ACTIVE = "#1d2230"
-TRACK = "#2a2f3a"
-TEXT = "#e8eaf0"
-MUTED = "#8b93a5"
-ACCENT = "#d97757"
-GREEN = "#4ade80"
-AMBER = "#fbbf24"
-ORANGE = "#fb923c"
-RED = "#f87171"
-FONT = "Segoe UI"
+# la ventana y su barra de título siguen el tema de Windows (claro u oscuro)
+ctk.set_appearance_mode("system")
+
+# (claro, oscuro): CustomTkinter usa el que toque según el tema
+BG = ("#f3f4f7", "#0e1015")
+CARD = ("#ffffff", "#171a21")
+CARD_ALT = ("#f5f6f8", "#1d2129")
+BORDER = ("#e2e5ea", "#262b35")
+TRACK = ("#e7e9ee", "#272c36")
+TEXT = ("#14171c", "#eef0f5")
+MUTED = ("#6b7280", "#8d95a6")
+ACCENT = ("#c96442", "#e07b56")
+ACCENT_HOVER = ("#b35838", "#c96a47")
+ON_ACCENT = "#ffffff"
+GREEN = ("#15803d", "#4ade80")
+AMBER = ("#b45309", "#fbbf24")
+ORANGE = ("#c2410c", "#fb923c")
+RED = ("#dc2626", "#f87171")
+FONT = "Segoe UI Variable Text"  # Windows 11; en Windows 10 Tk usa la de por defecto
+MONO = "Cascadia Mono"
 
 DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+def font(size, bold=False):
+    return (FONT, size, "bold") if bold else (FONT, size)
+
 
 def listen_for_other_instances():
     """Ocupa el puerto de la app; devuelve None si ya lo tiene otra instancia."""
@@ -212,132 +226,13 @@ def reset_label(target):
     return f"se vacía {when} · en {countdown(target)}"
 
 
-class Meter(tk.Canvas):
-    """Barra de consumo: se llena según se gasta y pasa de verde a rojo."""
-
-    WIDTH = 400
-    HEIGHT = 58
-    BAR_Y = 34
-    BAR_H = 16
-
-    def __init__(self, master, title, bg):
-        super().__init__(master, width=self.WIDTH, height=self.HEIGHT, bg=bg,
-                         highlightthickness=0)
-        self.title = title
-
-    def pill(self, x1, x2, color):
-        r = self.BAR_H / 2
-        y1, y2 = self.BAR_Y, self.BAR_Y + self.BAR_H
-        if x2 - x1 < 2 * r:
-            x2 = x1 + 2 * r
-        self.create_oval(x1, y1, x1 + 2 * r, y2, fill=color, outline="")
-        self.create_oval(x2 - 2 * r, y1, x2, y2, fill=color, outline="")
-        self.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color, outline="")
-
-    def draw(self, used):
-        self.delete("all")
-        self.create_text(0, 12, text=self.title, anchor="w", fill=TEXT, font=(FONT, 10))
-        self.pill(0, self.WIDTH, TRACK)
-        if used is None:
-            self.create_text(self.WIDTH, 12, text="sin datos", anchor="e", fill=MUTED,
-                             font=(FONT, 10))
-            return
-        color = color_for(used)
-        right = self.create_text(self.WIDTH, 12, text=f"usado {used:.0f}%", anchor="e",
-                                 fill=color, font=(FONT, 12, "bold"))
-        left = self.bbox(right)[0]
-        self.create_text(left - 8, 12, text=f"queda {100 - used:.0f}% ·", anchor="e",
-                         fill=MUTED, font=(FONT, 9))
-        if used > 0:
-            self.pill(0, self.WIDTH * used / 100, color)
-
-
-class AccountCard(tk.Frame):
-    def __init__(self, master, app):
-        super().__init__(master, bg=CARD, padx=18, pady=14)
-        self.app = app
-        self.number = None
-
-        head = tk.Frame(self, bg=CARD)
-        head.pack(fill="x")
-        self.name = tk.Label(head, bg=CARD, fg=TEXT, font=(FONT, 13, "bold"), anchor="w")
-        self.name.pack(side="left")
-        self.badge = tk.Label(head, text=" ACTIVA ", bg=ACCENT, fg="#1a1a1a",
-                              font=(FONT, 8, "bold"))
-        self.empty = tk.Label(head, text=" AGOTADA ", bg=RED, fg="#1a1a1a",
-                              font=(FONT, 8, "bold"))
-        self.button = tk.Label(head, text="Usar esta", bg=TRACK, fg=TEXT,
-                               font=(FONT, 9), padx=10, pady=2, cursor="hand2")
-        self.button.bind("<Button-1>", lambda _e: self.app.switch_to(self.number))
-        self.email = tk.Label(self, bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
-        self.email.pack(fill="x", pady=(0, 10))
-
-        self.meters = {}
-        self.resets = {}
-        for key, title in (("fiveHour", "Límite de 5 horas"), ("sevenDay", "Límite semanal")):
-            meter = Meter(self, title, CARD)
-            meter.pack(anchor="w", pady=(4, 0))
-            label = tk.Label(self, bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
-            label.pack(fill="x", pady=(2, 6))
-            self.meters[key] = meter
-            self.resets[key] = label
-        self.warning = tk.Label(self, bg=CARD, fg=AMBER, font=(FONT, 9), anchor="w")
-
-    def set_bg(self, color):
-        stack = [self]
-        while stack:
-            widget = stack.pop()
-            if widget not in (self.badge, self.button, self.empty):
-                widget.configure(bg=color)
-            stack.extend(widget.winfo_children())
-
-    def update_account(self, acc):
-        self.number = acc.get("number")
-        self.acc = acc
-        self.name.configure(text=acc.get("alias") or acc.get("email", "?"))
-        self.email.configure(text=acc.get("email", ""))
-        self.badge.pack_forget()
-        self.button.pack_forget()
-        self.empty.pack_forget()
-        usage = acc.get("usage") or {}
-        if any((usage.get(k) or {}).get("pct", 0) >= 100 for k in ("fiveHour", "sevenDay")):
-            self.empty.pack(side="right", padx=(6, 0))
-        if acc.get("active"):
-            self.badge.pack(side="right")
-            self.set_bg(CARD_ACTIVE)
-        else:
-            self.button.pack(side="right")
-            self.set_bg(CARD)
-
-        for key, meter in self.meters.items():
-            pct = (usage.get(key) or {}).get("pct")
-            meter.draw(None if pct is None else min(100.0, max(0.0, pct)))
-
-        week = usage.get("sevenDay") or {}
-        note = ""
-        if acc.get("usageStatus") not in (None, "ok"):
-            note = f"⚠ {acc.get('usageStatus')}"
-        elif week.get("willLastToReset") is False and week.get("pct", 0) < 100:
-            note = "⚠ a este ritmo no llega al reinicio semanal"
-        self.warning.configure(text=note)
-        if note:
-            self.warning.pack(fill="x", pady=(10, 0))
-        else:
-            self.warning.pack_forget()
-        self.tick()
-
-    def tick(self):
-        usage = (getattr(self, "acc", None) or {}).get("usage") or {}
-        for key, label in self.resets.items():
-            label.configure(text=reset_label(parse_time((usage.get(key) or {}).get("resetsAt"))))
-
-
 def tray_image(used):
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
+    # la barra de tareas es oscura casi siempre: colores del tema oscuro
     d.rounded_rectangle((0, 0, size - 1, size - 1), radius=14,
-                        fill=TRACK if used is None else color_for(used))
+                        fill=TRACK[1] if used is None else color_for(used)[1])
     text = "–" if used is None else f"{used:.0f}"
     try:
         font = ImageFont.truetype("segoeuib.ttf", 40 if len(text) < 3 else 30)
@@ -402,30 +297,173 @@ class Tray:
         self.icon.stop()
 
 
-def make_button(master, text, command, primary=False):
-    button = tk.Label(master, text=text, bg=ACCENT if primary else TRACK,
-                      fg="#1a1a1a" if primary else TEXT,
-                      font=(FONT, 9, "bold" if primary else "normal"), padx=10, pady=2,
-                      cursor="hand2")
-    button.bind("<Button-1>", lambda _e: command())
-    return button
+def pick(color):
+    """El color del tema actual, para lo que no entiende las parejas (claro, oscuro)."""
+    return color[1] if ctk.get_appearance_mode() == "Dark" else color[0]
 
 
-class LogBox(tk.Text):
-    """Registro de lo que se va haciendo al instalar, para ver dónde falla."""
+def auto_wrap(label):
+    """Reparte el texto en líneas según el ancho que tenga: la ventana cambia de tamaño."""
+    def resize(event):
+        scale = ctk.ScalingTracker.get_widget_scaling(label)
+        label.configure(wraplength=max(int(event.width / scale) - 4, 40))
+    # en el marco del CTkLabel, no en su texto: ese mide lo que ocupa ya repartido
+    tk.Frame.bind(label, "<Configure>", resize, add="+")
+    return label
 
-    def __init__(self, master):
-        super().__init__(master, width=1, height=5, bg=CARD, fg=MUTED, font=("Consolas", 8),
-                         relief="flat", padx=10, pady=8, wrap="word", state="disabled",
-                         highlightthickness=0)
-        self.tag_configure("error", foreground=RED)
-        self.tag_configure("ok", foreground=GREEN)
+
+def text(master, value="", size=12, color=TEXT, bold=False, wrap=False, **kw):
+    label = ctk.CTkLabel(master, text=value, font=font(size, bold), text_color=color,
+                         anchor="w", justify="left", **kw)
+    return auto_wrap(label) if wrap else label
+
+
+def button(master, label, command, primary=False, **kw):
+    return ctk.CTkButton(master, text=label, command=command, height=30, width=72,
+                         corner_radius=8, font=font(12, primary),
+                         fg_color=ACCENT if primary else TRACK,
+                         hover_color=ACCENT_HOVER if primary else BORDER,
+                         text_color=ON_ACCENT if primary else TEXT, **kw)
+
+
+def pill(master, label, fg, color=ON_ACCENT):
+    return ctk.CTkLabel(master, text=f"  {label}  ", font=font(10, True), fg_color=fg,
+                        text_color=color, corner_radius=8, height=22)
+
+
+def card(master, **kw):
+    frame = ctk.CTkFrame(master, fg_color=CARD, corner_radius=16, border_width=1,
+                         border_color=BORDER, **kw)
+    inner = ctk.CTkFrame(frame, fg_color="transparent")
+    inner.pack(fill="x", padx=18, pady=16)
+    return frame, inner
+
+
+class Meter(ctk.CTkFrame):
+    """Un límite: título, % usado, barra que pasa de verde a rojo y cuándo se vacía."""
+
+    def __init__(self, master, title):
+        super().__init__(master, fg_color="transparent")
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x")
+        text(head, title, 13).pack(side="left")
+        self.value = text(head, "", 16, bold=True)
+        self.value.pack(side="right")
+        self.left = text(head, "", 11, MUTED)
+        self.left.pack(side="right", padx=(0, 8))
+        self.bar = ctk.CTkProgressBar(self, height=10, corner_radius=5, fg_color=TRACK,
+                                      progress_color=TRACK)
+        self.bar.pack(fill="x", pady=(6, 0))
+        self.bar.set(0)
+        self.note = text(self, "", 11, MUTED)
+        self.note.pack(fill="x", pady=(4, 0))
+
+    def show(self, used):
+        if used is None:
+            self.value.configure(text="sin datos", text_color=MUTED)
+            self.left.configure(text="")
+            self.bar.configure(progress_color=TRACK)
+            self.bar.set(0)
+            return
+        color = color_for(used)
+        self.value.configure(text=f"{used:.0f}%", text_color=color)
+        self.left.configure(text=f"queda {100 - used:.0f}% ·")
+        # la barra redondeada siempre pinta un trocito: a 0 se pinta del color del fondo
+        self.bar.configure(progress_color=color if used > 0 else TRACK)
+        self.bar.set(used / 100)
+
+
+class AccountCard(ctk.CTkFrame):
+    """Una cuenta en la pestaña Uso: sus dos límites y si es la que está en uso."""
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color=CARD, corner_radius=16, border_width=1,
+                         border_color=BORDER)
+        self.app = app
+        self.number = None
+        self.acc = None
+        inner = ctk.CTkFrame(self, fg_color="transparent")
+        inner.pack(fill="x", padx=18, pady=16)
+
+        head = ctk.CTkFrame(inner, fg_color="transparent")
+        head.pack(fill="x", pady=(0, 12))
+        names = ctk.CTkFrame(head, fg_color="transparent")
+        names.pack(side="left", fill="x", expand=True)
+        self.name = text(names, "", 16, bold=True)
+        self.name.pack(fill="x")
+        self.email = text(names, "", 11, MUTED)
+        self.email.pack(fill="x")
+        self.badge = pill(head, "EN USO", ACCENT)
+        self.empty = pill(head, "AGOTADA", RED)
+        self.button = button(head, "Usar", lambda: self.app.switch_to(self.number))
+
+        self.meters = {key: Meter(inner, title) for key, title in
+                       (("fiveHour", "Límite de 5 horas"), ("sevenDay", "Límite semanal"))}
+        for meter in self.meters.values():
+            meter.pack(fill="x", pady=(0, 10))
+        self.warning = text(inner, "", 11, AMBER, wrap=True)
+
+    def update_account(self, acc):
+        self.number = acc.get("number")
+        self.acc = acc
+        self.name.configure(text=acc.get("alias") or acc.get("email", "?"))
+        self.email.configure(text=acc.get("email", ""))
+        for widget in (self.badge, self.button, self.empty):
+            widget.pack_forget()
+        usage = acc.get("usage") or {}
+        if acc.get("active"):
+            self.badge.pack(side="right")
+            self.configure(border_color=ACCENT, border_width=2)
+        else:
+            self.button.pack(side="right")
+            self.configure(border_color=BORDER, border_width=1)
+        if any((usage.get(k) or {}).get("pct", 0) >= 100 for k in ("fiveHour", "sevenDay")):
+            self.empty.pack(side="right", padx=(0, 6))
+
+        for key, meter in self.meters.items():
+            pct = (usage.get(key) or {}).get("pct")
+            meter.show(None if pct is None else min(100.0, max(0.0, pct)))
+
+        week = usage.get("sevenDay") or {}
+        note = ""
+        if acc.get("usageStatus") not in (None, "ok"):
+            note = f"⚠ {acc.get('usageStatus')}"
+        elif week.get("willLastToReset") is False and week.get("pct", 0) < 100:
+            note = "⚠ a este ritmo no llega al reinicio semanal"
+        self.warning.configure(text=note)
+        if note:
+            self.warning.pack(fill="x")
+        else:
+            self.warning.pack_forget()
+        self.tick()
+
+    def tick(self):
+        usage = (self.acc or {}).get("usage") or {}
+        for key, meter in self.meters.items():
+            meter.note.configure(
+                text=reset_label(parse_time((usage.get(key) or {}).get("resetsAt"))))
+
+
+class LogBox(ctk.CTkTextbox):
+    """Registro de lo que se va haciendo al instalar, para ver dónde falla.
+
+    Aparece abajo de su pestaña (antes de anchor) la primera vez que se escribe algo.
+    """
+
+    def __init__(self, master, anchor):
+        super().__init__(master, height=120, corner_radius=12, fg_color=CARD,
+                         border_width=1, border_color=BORDER, text_color=MUTED,
+                         font=(MONO, 11), wrap="word")
+        self.anchor = anchor
+        self.tag_config("error", foreground=pick(RED))
+        self.tag_config("ok", foreground=pick(GREEN))
+        self.configure(state="disabled")
 
     def write(self, line, tag=None):
         if not self.winfo_ismapped():
-            self.pack(fill="x")
+            self.pack(side="bottom", fill="x", pady=(10, 0), before=self.anchor)
         self.configure(state="normal")
-        self.insert("end", line + "\n", tag or ())
+        self.insert("end", line + "\n", tag)
         self.see("end")
         self.configure(state="disabled")
 
@@ -435,19 +473,33 @@ class LogBox(tk.Text):
         self.configure(state="disabled")
 
 
-class AccountsPage(tk.Frame):
+class Page(ctk.CTkFrame):
+    """Una pestaña: su contenido se desplaza y lo de abajo (registro, avisos) queda fijo."""
+
+    def __init__(self, master):
+        super().__init__(master, fg_color="transparent")
+        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0,
+                                           scrollbar_button_color=TRACK,
+                                           scrollbar_button_hover_color=BORDER)
+        self.body.pack(fill="both", expand=True)
+        # lo que se coloca en la ventana es el marco que envuelve la zona con scroll
+        self.anchor = self.body._parent_frame
+
+    def pin_bottom(self, widget, **pack):
+        """Coloca widget abajo del todo, fuera de la zona que se desplaza."""
+        widget.pack(side="bottom", fill="x", before=self.anchor, **pack)
+
+
+class AccountsPage(Page):
     """Preparar todo y añadir, usar o quitar cuentas sin tocar la terminal."""
 
     def __init__(self, master, app):
-        super().__init__(master, bg=BG)
+        super().__init__(master)
         self.app = app
         self.status = None     # lo que hay instalado y con qué cuenta se ha iniciado sesión
         self.accounts = None   # las cuentas guardadas, según la última lectura de cswap
-        self.content = tk.Frame(self, bg=BG)
-        self.content.pack(fill="x")
-        tk.Label(self.content, text="Comprobando…", bg=BG, fg=MUTED,
-                 font=(FONT, 9)).pack(anchor="w")
-        self.log = LogBox(self)
+        text(self.body, "Comprobando…", 12, MUTED).pack(anchor="w")
+        self.log = LogBox(self, self.anchor)
 
     def refresh(self):
         def work():
@@ -464,21 +516,10 @@ class AccountsPage(tk.Frame):
         self.accounts = accounts
         self.render()
 
-    def card(self, title):
-        frame = tk.Frame(self.content, bg=CARD, padx=18, pady=14)
-        frame.pack(fill="x", pady=(0, 10))
-        tk.Label(frame, text=title, bg=CARD, fg=TEXT, font=(FONT, 12, "bold"),
-                 anchor="w").pack(fill="x")
-        return frame
-
-    def hint(self, master, text, bg=CARD):
-        tk.Label(master, text=text, bg=bg, fg=MUTED, font=(FONT, 9), justify="left",
-                 anchor="w", wraplength=400).pack(fill="x", pady=(8, 0))
-
     def render(self):
         if self.status is None:
             return
-        for child in self.content.winfo_children():
+        for child in self.body.winfo_children():
             child.destroy()
         login = self.status["login"]
         installed = login is not None
@@ -487,8 +528,7 @@ class AccountsPage(tk.Frame):
         saved = [acc.get("email") for acc in accounts]
         steps = [
             ("Instalar Claude Code", installed, "Instalar", self.install_claude),
-            ("Iniciar sesión en Claude", bool(email), "Iniciar sesión",
-             self.add_account),
+            ("Iniciar sesión en Claude", bool(email), "Iniciar sesión", self.add_account),
             ("Activar el cambio de cuentas", self.status["cswap"] and bool(accounts),
              "Activar", self.save_current),
         ]
@@ -497,60 +537,69 @@ class AccountsPage(tk.Frame):
             return
 
         if email not in saved:
-            banner = tk.Frame(self.content, bg=CARD_ACTIVE, padx=14, pady=10)
-            banner.pack(fill="x", pady=(0, 10))
-            make_button(banner, "Guardarla", self.save_current,
-                        primary=True).pack(side="right", padx=(10, 0))
-            tk.Label(banner, bg=CARD_ACTIVE, fg=TEXT, font=(FONT, 9), justify="left",
-                     anchor="w", wraplength=300,
-                     text=f"Claude Code está usando {email}, pero no la tienes guardada "
-                          "aquí.").pack(side="left", fill="x")
+            banner = ctk.CTkFrame(self.body, fg_color=CARD, corner_radius=14, border_width=1,
+                                  border_color=ACCENT)
+            banner.pack(fill="x", pady=(0, 12))
+            row = ctk.CTkFrame(banner, fg_color="transparent")
+            row.pack(fill="x", padx=14, pady=12)
+            button(row, "Guardarla", self.save_current, primary=True).pack(side="right",
+                                                                           padx=(10, 0))
+            text(row, f"Claude Code está usando {email}, pero no la tienes guardada aquí.",
+                 12, wrap=True).pack(side="left", fill="x", expand=True)
 
-        box = self.card("Tus cuentas")
+        frame, box = card(self.body)
+        frame.pack(fill="x")
+        text(box, "Tus cuentas", 17, bold=True).pack(fill="x")
         for acc in accounts:
             self.account_row(box, acc)
-        add = make_button(box, "+  Añadir una cuenta", self.add_account, primary=True)
-        add.configure(pady=6)
-        add.pack(fill="x", pady=(14, 0))
-        self.hint(box, "Se abre el navegador para que entres con la otra cuenta y se guarda "
-                       "sola. No cierres sesión antes en Claude Code.")
+        ctk.CTkButton(box, text="+   Añadir una cuenta", command=self.add_account, height=42,
+                      corner_radius=10, font=font(13, True), fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, text_color=ON_ACCENT).pack(fill="x",
+                                                                           pady=(16, 0))
+        text(box, "Se abre el navegador para que entres con la otra cuenta y se guarda sola. "
+                  "No cierres sesión antes en Claude Code.", 11, MUTED,
+             wrap=True).pack(fill="x", pady=(10, 0))
 
     def render_steps(self, steps):
-        box = self.card("Vamos a prepararlo")
-        self.hint(box, "Son tres pasos y solo hay que hacerlos una vez.")
+        frame, box = card(self.body)
+        frame.pack(fill="x")
+        text(box, "Vamos a prepararlo", 17, bold=True).pack(fill="x")
+        text(box, "Son tres pasos y solo hay que hacerlos una vez.", 12, MUTED,
+             wrap=True).pack(fill="x", pady=(4, 6))
         current = next(i for i, (_t, done, _b, _c) in enumerate(steps) if not done)
-        for i, (title, done, button, command) in enumerate(steps):
-            row = tk.Frame(box, bg=CARD)
-            row.pack(fill="x", pady=(12, 0))
-            mark = "✔" if done else str(i + 1)
-            tk.Label(row, text=mark, width=2, font=(FONT, 10, "bold"),
-                     bg=GREEN if done else (ACCENT if i == current else TRACK),
-                     fg="#1a1a1a" if done or i == current else MUTED).pack(side="left")
-            tk.Label(row, text=title, bg=CARD, font=(FONT, 10),
-                     fg=TEXT if i == current else MUTED).pack(side="left", padx=(10, 0))
+        for i, (title, done, label, command) in enumerate(steps):
+            row = ctk.CTkFrame(box, fg_color="transparent")
+            row.pack(fill="x", pady=(10, 0))
+            ctk.CTkLabel(row, text="✓" if done else str(i + 1), width=28, height=28,
+                         corner_radius=14, font=font(12, True),
+                         fg_color=GREEN if done else (ACCENT if i == current else TRACK),
+                         text_color=ON_ACCENT if done or i == current else MUTED,
+                         ).pack(side="left")
+            text(row, title, 13, TEXT if i == current else MUTED).pack(side="left",
+                                                                      padx=(12, 0))
             if i == current:
-                make_button(row, button, command, primary=True).pack(side="right")
+                button(row, label, command, primary=True).pack(side="right")
 
     def account_row(self, master, acc):
         active = acc.get("active")
-        row = tk.Frame(master, bg=CARD_ACTIVE if active else CARD, padx=10, pady=8)
-        row.pack(fill="x", pady=(8, 0))
-        bg = row.cget("bg")
-        names = tk.Frame(row, bg=bg)
-        names.pack(side="left", fill="x")
-        tk.Label(names, text=acc.get("alias") or acc.get("email", "?"), bg=bg, fg=TEXT,
-                 font=(FONT, 10, "bold"), anchor="w").pack(fill="x")
-        tk.Label(names, text=acc.get("email", ""), bg=bg, fg=MUTED, font=(FONT, 8),
-                 anchor="w").pack(fill="x")
-        remove = tk.Label(row, text="✕", bg=bg, fg=MUTED, font=(FONT, 11), cursor="hand2")
-        remove.pack(side="right", padx=(8, 0))
-        remove.bind("<Button-1>", lambda _e: self.remove(acc))
+        row = ctk.CTkFrame(master, fg_color=CARD_ALT, corner_radius=12,
+                           border_width=2 if active else 0, border_color=ACCENT)
+        row.pack(fill="x", pady=(10, 0))
+        inner = ctk.CTkFrame(row, fg_color="transparent")
+        inner.pack(fill="x", padx=12, pady=10)
+        names = ctk.CTkFrame(inner, fg_color="transparent")
+        names.pack(side="left", fill="x", expand=True)
+        text(names, acc.get("alias") or acc.get("email", "?"), 13, bold=True).pack(fill="x")
+        text(names, acc.get("email", ""), 11, MUTED).pack(fill="x")
+        ctk.CTkButton(inner, text="✕", width=30, height=30, corner_radius=8,
+                      fg_color="transparent", hover_color=TRACK, text_color=MUTED,
+                      font=font(13), command=lambda: self.remove(acc)).pack(side="right",
+                                                                           padx=(6, 0))
         if active:
-            tk.Label(row, text=" EN USO ", bg=ACCENT, fg="#1a1a1a",
-                     font=(FONT, 8, "bold")).pack(side="right")
+            pill(inner, "EN USO", ACCENT).pack(side="right")
         else:
-            make_button(row, "Usar", lambda: self.app.switch_to(acc.get("number"))
-                        ).pack(side="right")
+            button(inner, "Usar", lambda: self.app.switch_to(acc.get("number"))
+                   ).pack(side="right")
 
     def task(self, title, work):
         self.app.run_task(self.log, title, work, after=self.after_change)
@@ -579,114 +628,83 @@ class AccountsPage(tk.Frame):
                   lambda log: setup_tools.remove_account(acc.get("number"), log))
 
 
-class SpendMeter(Meter):
-    """Barra con el gasto de tokens estimado: 100 % es usar Claude Code sin plugins."""
-
-    def draw(self, spend):
-        self.delete("all")
-        self.create_text(0, 12, text=self.title, anchor="w", fill=TEXT, font=(FONT, 10))
-        self.pill(0, self.WIDTH, TRACK)
-        saved = round((1 - spend) * 100)
-        text, color = (f"≈{saved} % menos", GREEN) if saved > 0 else ("sin ahorro", MUTED)
-        right = self.create_text(self.WIDTH, 12, text=text, anchor="e", fill=color,
-                                 font=(FONT, 12, "bold"))
-        left = self.bbox(right)[0]
-        self.create_text(left - 8, 12, text=f"{spend * 100:.0f} % del normal ·", anchor="e",
-                         fill=MUTED, font=(FONT, 9))
-        self.pill(0, self.WIDTH * spend, ACCENT)
-
-
-class PluginsPage(tk.Frame):
+class PluginsPage(Page):
     """Catálogo de herramientas para gastar menos tokens en Claude Code."""
 
-    LABELS = {"missing": ("No instalado", MUTED), "enabled": ("✔ Activo", GREEN),
+    LABELS = {"missing": ("No instalado", MUTED), "enabled": ("● Activo", GREEN),
               "disabled": ("Desactivado", AMBER)}
 
-    LIST_HEIGHT = 420
-
     def __init__(self, master, app):
-        super().__init__(master, bg=BG)
+        super().__init__(master)
         self.app = app
         self.cards = []
 
-        summary = tk.Frame(self, bg=CARD, padx=18, pady=12)
-        summary.pack(fill="x", pady=(0, 10))
-        self.spend = SpendMeter(summary, "Gasto estimado", CARD)
-        self.spend.pack(anchor="w")
-        self.spend.draw(1.0)
-        tk.Label(summary, bg=CARD, fg=MUTED, font=(FONT, 8), anchor="w", justify="left",
-                 wraplength=400,
-                 text="Orientativo, según las pruebas publicadas de cada plugin. Los que "
-                      "nadie ha medido no cuentan. Los plugins valen para todas las "
-                      "cuentas.").pack(fill="x", pady=(4, 0))
-
-        # el catálogo no cabe entero: va dentro de un canvas con scroll
-        holder = tk.Frame(self, bg=BG)
-        holder.pack(fill="x", pady=(0, 8))
-        canvas = tk.Canvas(holder, bg=BG, height=self.LIST_HEIGHT, highlightthickness=0,
-                           width=1)
-        canvas.pack(side="left", fill="x", expand=True)
-        inner = tk.Frame(canvas, bg=BG)
-        window = canvas.create_window(0, 0, window=inner, anchor="nw")
-        inner.bind("<Configure>",
-                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
-
-        def wheel(event):
-            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-        holder.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", wheel))
-        holder.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+        frame, summary = card(self.body)
+        frame.pack(fill="x", pady=(0, 12))
+        self.spend = Meter(summary, "Gasto estimado de tokens")
+        self.spend.pack(fill="x")
+        self.show_spend(1.0)
+        self.spend.note.configure(
+            text="Orientativo, según las pruebas publicadas de cada plugin. Los que nadie ha "
+                 "medido no cuentan. Los plugins valen para todas las cuentas.")
+        auto_wrap(self.spend.note)
 
         for tool in setup_tools.TOOLS:
-            card = tk.Frame(inner, bg=CARD, padx=18, pady=12)
-            card.pack(fill="x", pady=(0, 8))
-            head = tk.Frame(card, bg=CARD)
+            frame, box = card(self.body)
+            frame.pack(fill="x", pady=(0, 12))
+            head = ctk.CTkFrame(box, fg_color="transparent")
             head.pack(fill="x")
-            tk.Label(head, text=tool.name, bg=CARD, fg=TEXT,
-                     font=(FONT, 11, "bold")).pack(side="left")
-            tk.Label(head, text=f" {tool.priority.upper()} ", font=(FONT, 7, "bold"),
-                     bg=ACCENT if tool.priority == "Alta" else TRACK,
-                     fg="#1a1a1a" if tool.priority == "Alta" else TEXT,
-                     ).pack(side="left", padx=(8, 0))
-            state = tk.Label(head, text="comprobando…", bg=CARD, fg=MUTED, font=(FONT, 9))
-            state.pack(side="left", padx=(8, 0))
+            text(head, tool.name, 15, bold=True).pack(side="left")
+            high = tool.priority == "Alta"
+            pill(head, tool.priority.upper(), ACCENT if high else TRACK,
+                 ON_ACCENT if high else TEXT).pack(side="left", padx=(10, 0))
+            state = text(head, "comprobando…", 12, MUTED)
+            state.pack(side="right")
+            text(box, tool.description, 12, wrap=True).pack(fill="x", pady=(8, 4))
+
+            lines = [("Bueno", tool.pros, GREEN, MUTED), ("Malo", tool.cons, AMBER, MUTED)]
+            if tool.quality_risk:
+                lines.append(("⚠", "No se ha probado si puede afectar a la calidad del "
+                                   "código.", ORANGE, ORANGE))
+            for tag, value, tag_color, text_color in lines:
+                row = ctk.CTkFrame(box, fg_color="transparent")
+                row.pack(fill="x", pady=(4, 0))
+                text(row, tag, 12, tag_color, bold=True, width=56).pack(side="left", anchor="n")
+                text(row, value, 12, text_color, wrap=True).pack(side="left", fill="x",
+                                                                  expand=True)
+
+            bottom = ctk.CTkFrame(box, fg_color="transparent")
+            bottom.pack(fill="x", pady=(12, 0))
             if tool.saving is None:
                 saving, color = "ahorro sin medir", MUTED
             elif tool.saving > 0:
                 saving, color = f"ahorra ≈{tool.saving * 100:g} %".replace(".", ","), GREEN
             else:
                 saving, color = "no ahorra", MUTED
-            tk.Label(card, text=tool.description, bg=CARD, fg=TEXT, font=(FONT, 9),
-                     anchor="w", justify="left", wraplength=360).pack(fill="x", pady=(4, 0))
-            lines = [("Bueno", tool.pros, GREEN, MUTED), ("Malo", tool.cons, AMBER, MUTED)]
-            if tool.quality_risk:
-                lines.append(("  ⚠", "No se ha probado si puede afectar a la calidad del "
-                                     "código.", ORANGE, ORANGE))
-            for tag, text, tag_color, text_color in lines:
-                row = tk.Frame(card, bg=CARD)
-                row.pack(fill="x", pady=(3, 0))
-                tk.Label(row, text=tag, bg=CARD, fg=tag_color, font=(FONT, 9, "bold"),
-                         width=6, anchor="nw").pack(side="left", anchor="n")
-                tk.Label(row, text=text, bg=CARD, fg=text_color, font=(FONT, 9),
-                         anchor="w", justify="left", wraplength=320).pack(side="left",
-                                                                          fill="x")
-            bottom = tk.Frame(card, bg=CARD)
-            bottom.pack(fill="x", pady=(8, 0))
-            tk.Label(bottom, text=saving, bg=CARD, fg=color,
-                     font=(FONT, 9, "bold")).pack(side="right")
-            buttons = tk.Frame(bottom, bg=CARD)
+            text(bottom, saving, 12, color, bold=True).pack(side="right")
+            buttons = ctk.CTkFrame(bottom, fg_color="transparent")
             buttons.pack(side="left")
-            options = tk.Frame(card, bg=CARD)
+            options = ctk.CTkFrame(box, fg_color="transparent")
             self.cards.append((tool, state, buttons, options))
+
         # solo se enseña cuando hay cambios que Claude Code aún no ha cargado
-        self.restart_note = tk.Frame(self, bg=CARD_ACTIVE, padx=14, pady=10)
-        make_button(self.restart_note, "Reiniciar Claude Code", self.restart_claude,
-                    primary=True).pack(side="right", padx=(10, 0))
-        tk.Label(self.restart_note, bg=CARD_ACTIVE, fg=TEXT, font=(FONT, 9), anchor="w",
-                 justify="left", wraplength=250,
-                 text="Has hecho cambios. Reinicia Claude Code para que se apliquen.",
-                 ).pack(side="left", fill="x")
-        self.log = LogBox(self)
+        self.restart_note = ctk.CTkFrame(self, fg_color=CARD, corner_radius=14,
+                                         border_width=1, border_color=ACCENT)
+        row = ctk.CTkFrame(self.restart_note, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=10)
+        button(row, "Reiniciar Claude Code", self.restart_claude,
+               primary=True).pack(side="right", padx=(10, 0))
+        text(row, "Has hecho cambios. Reinicia Claude Code para que se apliquen.", 12,
+             wrap=True).pack(side="left", fill="x", expand=True)
+        self.log = LogBox(self, self.anchor)
+
+    def show_spend(self, spend):
+        saved = round((1 - spend) * 100)
+        self.spend.value.configure(text=f"≈{saved} % menos" if saved > 0 else "sin ahorro",
+                                   text_color=GREEN if saved > 0 else MUTED)
+        self.spend.left.configure(text=f"{spend * 100:.0f} % del normal ·")
+        self.spend.bar.configure(progress_color=ACCENT)
+        self.spend.bar.set(spend)
 
     def refresh(self):
         def work():
@@ -703,49 +721,49 @@ class PluginsPage(tk.Frame):
         if not restart:
             self.restart_note.pack_forget()
         elif not self.restart_note.winfo_ismapped():
-            where = {"before": self.log} if self.log.winfo_manager() else {}
-            self.restart_note.pack(fill="x", pady=(0, 8), **where)
-        self.spend.draw(setup_tools.estimated_spend(
+            self.pin_bottom(self.restart_note, pady=(10, 0))
+        self.show_spend(setup_tools.estimated_spend(
             tool for (tool, _s, _b, _o), status in zip(self.cards, statuses)
             if status == "enabled"))
         for (tool, state, buttons, options), status in zip(self.cards, statuses):
-            text, color = self.LABELS[status]
-            state.configure(text=text, fg=color)
+            label, color = self.LABELS[status]
+            state.configure(text=label, text_color=color)
             for child in buttons.winfo_children() + options.winfo_children():
                 child.destroy()
             options.pack_forget()
             if tool.has_options and status != "missing":
                 self.ponytail_options(options)
-                options.pack(fill="x", pady=(10, 0))
+                options.pack(fill="x", pady=(14, 0))
             if status == "missing":
-                make_button(buttons, "Instalar", lambda t=tool: self.install(t),
-                            primary=True).pack(side="left")
+                button(buttons, "Instalar", lambda t=tool: self.install(t),
+                       primary=True).pack(side="left")
                 continue
             enable = status == "disabled"
-            make_button(buttons, "Activar" if enable else "Desactivar",
-                        lambda t=tool, e=enable: self.toggle(t, e),
-                        primary=enable).pack(side="left")
-            make_button(buttons, "Actualizar",
-                        lambda t=tool: self.update(t)).pack(side="left", padx=(6, 0))
-            make_button(buttons, "Desinstalar",
-                        lambda t=tool: self.uninstall(t)).pack(side="left", padx=(6, 0))
+            button(buttons, "Activar" if enable else "Desactivar",
+                   lambda t=tool, e=enable: self.toggle(t, e), primary=enable).pack(side="left")
+            button(buttons, "Actualizar", lambda t=tool: self.update(t)).pack(side="left",
+                                                                              padx=(6, 0))
+            button(buttons, "Desinstalar", lambda t=tool: self.uninstall(t)).pack(side="left",
+                                                                                  padx=(6, 0))
 
     def ponytail_options(self, frame):
         """Nivel con el que empieza cada sesión y si se ve su barra en Claude Code."""
-        row = tk.Frame(frame, bg=CARD)
+        row = ctk.CTkFrame(frame, fg_color="transparent")
         row.pack(fill="x")
-        tk.Label(row, text="Nivel", bg=CARD, fg=MUTED, font=(FONT, 9, "bold"), width=6,
-                 anchor="w").pack(side="left")
-        current = setup_tools.ponytail_level()
-        for level in setup_tools.PONYTAIL_LEVELS:
-            make_button(row, level, lambda lv=level: self.set_ponytail(level=lv),
-                        primary=level == current).pack(side="left", padx=(0, 4))
+        text(row, "Nivel", 12, MUTED, bold=True, width=56).pack(side="left")
+        levels = ctk.CTkSegmentedButton(
+            row, values=setup_tools.PONYTAIL_LEVELS, height=30, corner_radius=8,
+            font=font(12), fg_color=TRACK, unselected_color=TRACK,
+            unselected_hover_color=BORDER, selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER, text_color=TEXT,
+            command=lambda level: self.set_ponytail(level=level))
+        levels.set(setup_tools.ponytail_level())
+        levels.pack(side="left")
         band = tk.BooleanVar(value=setup_tools.ponytail_band_visible())
-        tk.Checkbutton(frame, text="Mostrar su barra en Claude Code", variable=band,
-                       command=lambda: self.set_ponytail(band=band.get()), bg=CARD, fg=MUTED,
-                       selectcolor=BG, activebackground=CARD, activeforeground=TEXT,
-                       font=(FONT, 9), highlightthickness=0, bd=0,
-                       cursor="hand2").pack(anchor="w", pady=(6, 0))
+        ctk.CTkSwitch(frame, text="Mostrar su barra en Claude Code", variable=band,
+                      font=font(12), text_color=TEXT, progress_color=ACCENT,
+                      fg_color=TRACK, command=lambda: self.set_ponytail(band=band.get()),
+                      ).pack(anchor="w", pady=(10, 0))
 
     def set_ponytail(self, level=None, band=None):
         def work(log):
@@ -798,9 +816,9 @@ class PluginsPage(tk.Frame):
         self.task("Cerrando Claude Code…", setup_tools.close_claude, changes=False)
 
 
-class App(tk.Tk):
+class App(ctk.CTk):
     def __init__(self, start_hidden=False, listener=None):
-        super().__init__()
+        super().__init__(fg_color=BG)
         self.queue = queue.Queue()
         self.poll_queue()
         self.listener = listener
@@ -808,83 +826,83 @@ class App(tk.Tk):
             threading.Thread(target=self.serve_other_instances, args=(listener,),
                              daemon=True).start()
         self.title("Claude Usage")
-        self.configure(bg=BG, padx=16, pady=14)
-        self.resizable(False, False)
         icon = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "claude_usage.ico"
         if icon.exists():
             self.iconbitmap(str(icon))
+            self.after(250, lambda: self.iconbitmap(str(icon)))  # CustomTkinter pone el suyo
+        # tamaño fijo al cambiar de pestaña; se puede redimensionar a mano
+        scale = ctk.ScalingTracker.get_window_scaling(self)
+        height = min(860, int(self.winfo_screenheight() / scale * 0.85))
+        self.geometry(f"520x{height}")
+        self.minsize(440, 560)
         self.cards = []
         self.busy = False
         self.task_running = False
+        self.pinned = False
 
-        top = tk.Frame(self, bg=BG)
-        top.pack(fill="x", pady=(0, 10))
-        titles = tk.Frame(top, bg=BG)
+        shell = ctk.CTkFrame(self, fg_color="transparent")
+        shell.pack(fill="both", expand=True, padx=18, pady=(16, 12))
+
+        top = ctk.CTkFrame(shell, fg_color="transparent")
+        top.pack(fill="x", pady=(0, 14))
+        if icon.exists():
+            logo = Image.open(icon)
+            ctk.CTkLabel(top, text="", image=ctk.CTkImage(logo, logo, size=(34, 34))
+                         ).pack(side="left", padx=(0, 12))
+        titles = ctk.CTkFrame(top, fg_color="transparent")
         titles.pack(side="left")
-        tk.Label(titles, text="✳ Uso de Claude", bg=BG, fg=TEXT,
-                 font=(FONT, 15, "bold")).pack(anchor="w")
-        tk.Label(titles, text="Consumo de cada cuenta", bg=BG, fg=MUTED,
-                 font=(FONT, 9)).pack(anchor="w")
-        self.pin_var = tk.BooleanVar(value=False)
-        pin = tk.Label(top, text="📌", bg=BG, fg=MUTED, font=(FONT, 11), cursor="hand2")
-        pin.pack(side="right", padx=(8, 0))
-        pin.bind("<Button-1>", lambda _e: self.toggle_pin(pin))
-        refresh = tk.Label(top, text="⟳", bg=BG, fg=MUTED, font=(FONT, 15), cursor="hand2")
-        refresh.pack(side="right")
-        refresh.bind("<Button-1>", lambda _e: self.refresh_all())
+        text(titles, "Claude Usage", 20, bold=True).pack(anchor="w")
+        text(titles, "Consumo de tus cuentas de Claude Code", 12, MUTED).pack(anchor="w")
+        self.pin = self.icon_button(top, "📌", self.toggle_pin)
+        self.pin.pack(side="right", padx=(4, 0))
+        self.icon_button(top, "⟳", self.refresh_all).pack(side="right")
 
-        self.update_bar = tk.Frame(self, bg=CARD_ACTIVE, padx=12, pady=8)
-        self.update_text = tk.Label(self.update_bar, bg=CARD_ACTIVE, fg=TEXT, font=(FONT, 9),
-                                    anchor="w")
-        self.update_text.pack(side="left")
-        self.update_button = tk.Label(self.update_bar, bg=ACCENT, fg="#1a1a1a",
-                                      font=(FONT, 9, "bold"), padx=10, pady=2, cursor="hand2")
+        self.update_bar = ctk.CTkFrame(shell, fg_color=CARD, corner_radius=14, border_width=1,
+                                       border_color=ACCENT)
+        row = ctk.CTkFrame(self.update_bar, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=10)
+        self.update_button = button(row, "Actualizar", self.start_update, primary=True)
         self.update_button.pack(side="right", padx=(10, 0))
-        self.update_button.bind("<Button-1>", lambda _e: self.start_update())
+        self.update_text = text(row, "", 12, wrap=True)
+        self.update_text.pack(side="left", fill="x", expand=True)
         self.release = None
         self.downloading = False
 
-        tabs = tk.Frame(self, bg=BG)
-        tabs.pack(fill="x", pady=(0, 10))
-        self.pages = tk.Frame(self, bg=BG)
-        self.pages.pack(fill="both")
-        usage = tk.Frame(self.pages, bg=BG)
-        self.body = tk.Frame(usage, bg=BG)
-        self.body.pack(fill="both")
-        self.status = tk.Label(usage, text="Cargando…", bg=BG, fg=MUTED, font=(FONT, 9),
-                               anchor="w")
-        self.status.pack(fill="x")
+        self.tabs = ctk.CTkSegmentedButton(
+            shell, values=["Uso", "Cuentas", "Plugins"], command=self.show_tab, height=36,
+            corner_radius=10, font=font(13, True), fg_color=CARD, unselected_color=CARD,
+            unselected_hover_color=TRACK, selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER, text_color=TEXT)
+        self.tabs.pack(fill="x", pady=(0, 14))
+        self.pages = ctk.CTkFrame(shell, fg_color="transparent")
+        self.pages.pack(fill="both", expand=True)
+        usage = Page(self.pages)
+        self.body = usage.body
+        self.status = text(usage, "Cargando…", 11, MUTED)
+        usage.pin_bottom(self.status, pady=(8, 0))
         self.accounts_page = AccountsPage(self.pages, self)
         self.plugins_page = PluginsPage(self.pages, self)
         self.tab_pages = {"Uso": usage, "Cuentas": self.accounts_page,
                           "Plugins": self.plugins_page}
-        self.tab_labels = {}
-        for name in self.tab_pages:
-            label = tk.Label(tabs, text=name, bg=BG, fg=MUTED, font=(FONT, 10, "bold"),
-                             padx=10, pady=3, cursor="hand2")
-            label.pack(side="left", padx=(0, 4))
-            label.bind("<Button-1>", lambda _e, n=name: self.show_tab(n))
-            self.tab_labels[name] = label
         self.show_tab("Uso")
-        self.autostart = tk.BooleanVar(value=setup_tools.autostart_enabled())
-        tk.Checkbutton(self, text="Abrir al iniciar Windows", variable=self.autostart,
-                       command=self.toggle_autostart, bg=BG, fg=MUTED, selectcolor=CARD,
-                       activebackground=BG, activeforeground=TEXT, font=(FONT, 9),
-                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w",
-                                                                         pady=(8, 0))
-        tk.Frame(self, bg=TRACK, height=1).pack(fill="x", pady=(8, 8))
-        footer = tk.Frame(self, bg=BG)
+
+        ctk.CTkFrame(shell, fg_color=BORDER, height=1).pack(fill="x", pady=(12, 10))
+        footer = ctk.CTkFrame(shell, fg_color="transparent")
         footer.pack(fill="x")
-        tk.Label(footer, text="Creado por ", bg=BG, fg=MUTED,
-                 font=(FONT, 9)).pack(side="left")
-        tk.Label(footer, text="Sergio Bernabé", bg=BG, fg=ACCENT,
-                 font=(FONT, 9, "bold")).pack(side="left")
-        tk.Label(footer, text=f"v{VERSION}", bg=BG, fg=MUTED,
-                 font=(FONT, 9)).pack(side="right")
-        self.check_link = tk.Label(footer, text="Buscar actualizaciones ·", bg=BG, fg=MUTED,
-                                   font=(FONT, 9, "underline"), cursor="hand2")
+        self.autostart = tk.BooleanVar(value=setup_tools.autostart_enabled())
+        ctk.CTkSwitch(footer, text="Abrir al iniciar Windows", variable=self.autostart,
+                      command=self.toggle_autostart, font=font(12), text_color=TEXT,
+                      progress_color=ACCENT, fg_color=TRACK).pack(side="left")
+        text(footer, f"v{VERSION}", 11, MUTED).pack(side="right")
+        self.check_link = ctk.CTkButton(
+            footer, text="Buscar actualizaciones", command=self.check_now, width=0, height=26,
+            corner_radius=6, font=font(11), fg_color="transparent", hover_color=TRACK,
+            text_color=MUTED)
         self.check_link.pack(side="right", padx=(0, 4))
-        self.check_link.bind("<Button-1>", lambda _e: self.check_now())
+        credit = ctk.CTkFrame(shell, fg_color="transparent")
+        credit.pack(fill="x", pady=(6, 0))
+        text(credit, "Creado por ", 11, MUTED).pack(side="left")
+        text(credit, "Sergio Bernabé", 11, ACCENT, bold=True).pack(side="left")
 
         self.tray = Tray(self) if pystray else None
         if self.tray:
@@ -898,6 +916,11 @@ class App(tk.Tk):
         self.after(TICK_MS, self.tick)
         self.after(5000, remove_update_leftovers)
         self.after(3000, self.check_for_update)
+
+    def icon_button(self, master, label, command):
+        return ctk.CTkButton(master, text=label, command=command, width=36, height=36,
+                             corner_radius=10, font=font(16), fg_color="transparent",
+                             hover_color=TRACK, text_color=MUTED)
 
     def toggle_autostart(self):
         try:
@@ -913,12 +936,10 @@ class App(tk.Tk):
         self.plugins_page.refresh()
 
     def show_tab(self, name):
-        for tab, page in self.tab_pages.items():
+        for page in self.tab_pages.values():
             page.pack_forget()
-            selected = tab == name
-            self.tab_labels[tab].configure(bg=TRACK if selected else BG,
-                                           fg=TEXT if selected else MUTED)
-        self.tab_pages[name].pack(fill="both")
+        self.tab_pages[name].pack(fill="both", expand=True)
+        self.tabs.set(name)
 
     def run_task(self, log, title, work, after=None):
         """Instalaciones y cambios, de uno en uno, contando lo que pasa en log."""
@@ -929,8 +950,8 @@ class App(tk.Tk):
         log.clear()
         log.write(title)
 
-        def line(text):
-            self.post(lambda: log.write(text))
+        def line(value):
+            self.post(lambda: log.write(value))
 
         def done(_result, error):
             self.task_running = False
@@ -977,7 +998,7 @@ class App(tk.Tk):
         self.lift()
         # Windows no deja que un proceso en segundo plano se ponga delante sin más
         self.attributes("-topmost", True)
-        self.attributes("-topmost", self.pin_var.get())
+        self.attributes("-topmost", self.pinned)
         self.focus_force()
 
     def quit_app(self):
@@ -985,10 +1006,10 @@ class App(tk.Tk):
             self.tray.stop()
         self.destroy()
 
-    def toggle_pin(self, label):
-        self.pin_var.set(not self.pin_var.get())
-        self.attributes("-topmost", self.pin_var.get())
-        label.configure(fg=ACCENT if self.pin_var.get() else MUTED)
+    def toggle_pin(self):
+        self.pinned = not self.pinned
+        self.attributes("-topmost", self.pinned)
+        self.pin.configure(text_color=ACCENT if self.pinned else MUTED)
 
     def run_in_background(self, work, done):
         def target():
@@ -1011,7 +1032,7 @@ class App(tk.Tk):
     def show(self, data, error):
         self.busy = False
         if error:
-            self.status.configure(text=f"Error: {error}", fg=RED)
+            self.status.configure(text=f"Error: {error}", text_color=RED)
             if not setup_tools.find("cswap") and not getattr(self, "sent_to_setup", False):
                 self.sent_to_setup = True  # solo la primera vez, para no secuestrar la ventana
                 self.show_tab("Cuentas")
@@ -1019,21 +1040,22 @@ class App(tk.Tk):
         accounts = data.get("accounts", [])
         self.accounts_page.show_accounts(accounts)
         while len(self.cards) < len(accounts):
-            card = AccountCard(self.body, self)
-            card.pack(fill="x", pady=(0, 10))
-            self.cards.append(card)
+            account = AccountCard(self.body, self)
+            account.pack(fill="x", pady=(0, 12))
+            self.cards.append(account)
         while len(self.cards) > len(accounts):
             self.cards.pop().destroy()
-        for card, acc in zip(self.cards, accounts):
-            card.update_account(acc)
+        for account, acc in zip(self.cards, accounts):
+            account.update_account(acc)
         if self.tray:
             self.tray.update(accounts)
         if not accounts:
             self.status.configure(
-                text="Aún no hay cuentas: guárdalas en la pestaña Cuentas.", fg=MUTED)
+                text="Aún no hay cuentas: guárdalas en la pestaña Cuentas.", text_color=MUTED)
             return
         self.status.configure(
-            text=f"Actualizado {datetime.now():%H:%M} · se refresca cada minuto", fg=MUTED)
+            text=f"Actualizado {datetime.now():%H:%M} · se refresca cada minuto",
+            text_color=MUTED)
 
     def switch_to(self, number):
         if number is None:
@@ -1042,20 +1064,20 @@ class App(tk.Tk):
             self.after(500, lambda: self.switch_to(number))
             return
         self.busy = True
-        self.status.configure(text=f"Cambiando a la cuenta {number}…", fg=MUTED)
+        self.status.configure(text=f"Cambiando a la cuenta {number}…", text_color=MUTED)
 
         def done(_result, error):
             self.busy = False
             if error:
-                self.status.configure(text=f"Error al cambiar: {error}", fg=RED)
+                self.status.configure(text=f"Error al cambiar: {error}", text_color=RED)
             else:
                 self.refresh(schedule=False)
 
         self.run_in_background(lambda: run_cswap("switch", str(number)), done)
 
     def tick(self):
-        for card in self.cards:
-            card.tick()
+        for account in self.cards:
+            account.tick()
         self.after(TICK_MS, self.tick)
 
     def check_for_update(self):
@@ -1063,19 +1085,19 @@ class App(tk.Tk):
         self.run_in_background(fetch_newer_release, self.on_release)
 
     def check_now(self):
-        if self.check_link.cget("text") == "Buscando… ·":
+        if self.check_link.cget("text") == "Buscando…":
             return
-        self.check_link.configure(text="Buscando… ·")
+        self.check_link.configure(text="Buscando…")
 
         def done(release, error):
             if error:
-                text = "Sin conexión ·"
+                label = "Sin conexión"
             elif release or self.release:
-                text = "Hay versión nueva ·"
+                label = "Hay versión nueva"
             else:
-                text = "✔ Estás al día ·"
-            self.check_link.configure(text=text)
-            self.after(5000, lambda: self.check_link.configure(text="Buscar actualizaciones ·"))
+                label = "✓ Estás al día"
+            self.check_link.configure(text=label)
+            self.after(5000, lambda: self.check_link.configure(text="Buscar actualizaciones"))
             self.on_release(release, error)
 
         self.run_in_background(fetch_newer_release, done)
@@ -1088,7 +1110,7 @@ class App(tk.Tk):
         self.update_text.configure(text=f"Hay una versión nueva: {tag}")
         self.update_button.configure(
             text="Actualizar" if can_self_update(release) else "Descargar")
-        self.update_bar.pack(fill="x", pady=(0, 10), before=self.pages)
+        self.update_bar.pack(fill="x", pady=(0, 14), before=self.tabs)
         if self.tray:
             self.tray.update_available(tag)
 
@@ -1129,12 +1151,6 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:
-            pass
     start_hidden = "--tray" in sys.argv
     listener = listen_for_other_instances()
     if listener is None and notify_running_instance(show=not start_hidden):
