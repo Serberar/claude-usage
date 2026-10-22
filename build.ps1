@@ -8,7 +8,8 @@ Write-Host "Compilando Claude Usage $version"
 
 python make_icon.py
 pyinstaller --noconfirm --onefile --windowed --name ClaudeUsage --icon claude_usage.ico `
-    --add-data "claude_usage.ico;." --hidden-import pystray._win32 claude_usage.pyw
+    --add-data "claude_usage.ico;." --hidden-import pystray._win32 `
+    --collect-data customtkinter claude_usage.pyw
 if ($LASTEXITCODE -ne 0) { throw "pyinstaller falló" }
 
 $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source

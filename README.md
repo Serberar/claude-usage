@@ -39,7 +39,7 @@ pip install -r requirements.txt
 pythonw claude_usage.pyw
 ```
 
-Sin `pystray` y `Pillow` funciona igual, pero sin el icono de la bandeja.
+Sin `pystray` funciona igual, pero sin el icono de la bandeja.
 
 ## Pruebas
 
