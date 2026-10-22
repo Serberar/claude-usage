@@ -24,7 +24,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -332,14 +332,6 @@ class AccountCard(tk.Frame):
             label.configure(text=reset_label(parse_time((usage.get(key) or {}).get("resetsAt"))))
 
 
-def binding_used(acc):
-    """El % del límite más gastado de la cuenta (el que te va a cortar antes)."""
-    usage = acc.get("usage") or {}
-    values = [(usage.get(k) or {}).get("pct") for k in ("fiveHour", "sevenDay")]
-    values = [v for v in values if v is not None]
-    return max(values) if values else None
-
-
 def tray_image(used):
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -394,7 +386,7 @@ class Tray:
             parts = [f"{label} {(usage.get(k) or {}).get('pct', 0):.0f}%"
                      for k, label in (("fiveHour", "5h"), ("sevenDay", "semana"))]
             name = active.get("alias") or active.get("email", "?")
-            self.icon.icon = tray_image(binding_used(active))
+            self.icon.icon = tray_image((usage.get("fiveHour") or {}).get("pct"))
             self.icon.title = f"{name} · usado {' · '.join(parts)}"
         self.icon.update_menu()
 
