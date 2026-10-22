@@ -26,7 +26,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -835,7 +835,7 @@ class App(ctk.CTk):
         # tamaño fijo al cambiar de pestaña; se puede redimensionar a mano
         scale = ctk.ScalingTracker.get_window_scaling(self)
         height = min(860, int(self.winfo_screenheight() / scale * 0.85))
-        self.geometry(f"520x{height}")
+        self.geometry(f"360x{height}")
         self.minsize(360, 520)
         self.cards = []
         self.busy = False
