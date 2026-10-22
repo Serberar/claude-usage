@@ -26,7 +26,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -167,6 +167,10 @@ def remove_update_leftovers():
     if not getattr(sys, "frozen", False):
         return
     current = Path(sys.executable)
+    if current.with_name(current.stem + ".old.exe").exists():
+        # recién actualizada: Windows guarda el icono del .exe viejo para esta ruta
+        subprocess.Popen([Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" /
+                          "ie4uinit.exe", "-show"], creationflags=setup_tools.NO_WINDOW)
     for suffix in (".old.exe", ".new.exe"):
         try:
             current.with_name(current.stem + suffix).unlink(missing_ok=True)
@@ -641,13 +645,10 @@ class PluginsPage(Page):
 
         frame, summary = card(self.body)
         frame.pack(fill="x", pady=(0, 12))
-        self.spend = Meter(summary, "Gasto estimado de tokens")
+        self.spend = Meter(summary, "Gasto estimado")
         self.spend.pack(fill="x")
-        self.show_spend(1.0)
-        self.spend.note.configure(
-            text="Orientativo, según las pruebas publicadas de cada plugin. Los que nadie ha "
-                 "medido no cuentan. Los plugins valen para todas las cuentas.")
         auto_wrap(self.spend.note)
+        self.show_spend(1.0)
 
         for tool in setup_tools.TOOLS:
             frame, box = card(self.body)
@@ -673,17 +674,15 @@ class PluginsPage(Page):
                 text(row, value, 12, text_color, wrap=True).pack(side="left", fill="x",
                                                                   expand=True)
 
-            bottom = ctk.CTkFrame(box, fg_color="transparent")
-            bottom.pack(fill="x", pady=(12, 0))
             if tool.saving is None:
-                saving, color = "ahorro sin medir", MUTED
+                saving, color = "Ahorro sin medir", MUTED
             elif tool.saving > 0:
-                saving, color = f"ahorra ≈{tool.saving * 100:g} %".replace(".", ","), GREEN
+                saving, color = f"Ahorra ≈{tool.saving * 100:g} %".replace(".", ","), GREEN
             else:
-                saving, color = "no ahorra", MUTED
-            text(bottom, saving, 12, color, bold=True).pack(side="right")
-            buttons = ctk.CTkFrame(bottom, fg_color="transparent")
-            buttons.pack(side="left")
+                saving, color = "No ahorra", MUTED
+            text(box, saving, 12, color, bold=True).pack(fill="x", pady=(10, 0))
+            buttons = ctk.CTkFrame(box, fg_color="transparent")
+            buttons.pack(fill="x", pady=(8, 0))
             options = ctk.CTkFrame(box, fg_color="transparent")
             self.cards.append((tool, state, buttons, options))
 
@@ -702,7 +701,10 @@ class PluginsPage(Page):
         saved = round((1 - spend) * 100)
         self.spend.value.configure(text=f"≈{saved} % menos" if saved > 0 else "sin ahorro",
                                    text_color=GREEN if saved > 0 else MUTED)
-        self.spend.left.configure(text=f"{spend * 100:.0f} % del normal ·")
+        self.spend.note.configure(
+            text=f"Gastas un {spend * 100:.0f} % de lo normal. Orientativo, según las pruebas "
+                 "publicadas de cada plugin; los que nadie ha medido no cuentan. Valen para "
+                 "todas las cuentas.")
         self.spend.bar.configure(progress_color=ACCENT)
         self.spend.bar.set(spend)
 
@@ -834,7 +836,7 @@ class App(ctk.CTk):
         scale = ctk.ScalingTracker.get_window_scaling(self)
         height = min(860, int(self.winfo_screenheight() / scale * 0.85))
         self.geometry(f"520x{height}")
-        self.minsize(440, 560)
+        self.minsize(360, 520)
         self.cards = []
         self.busy = False
         self.task_running = False
@@ -849,13 +851,15 @@ class App(ctk.CTk):
             logo = Image.open(icon)
             ctk.CTkLabel(top, text="", image=ctk.CTkImage(logo, logo, size=(34, 34))
                          ).pack(side="left", padx=(0, 12))
-        titles = ctk.CTkFrame(top, fg_color="transparent")
-        titles.pack(side="left")
-        text(titles, "Claude Usage", 20, bold=True).pack(anchor="w")
-        text(titles, "Consumo de tus cuentas de Claude Code", 12, MUTED).pack(anchor="w")
+        # los botones van antes que los títulos: si la ventana es estrecha, se recorta el texto
         self.pin = self.icon_button(top, "📌", self.toggle_pin)
         self.pin.pack(side="right", padx=(4, 0))
         self.icon_button(top, "⟳", self.refresh_all).pack(side="right")
+        titles = ctk.CTkFrame(top, fg_color="transparent")
+        titles.pack(side="left", fill="x", expand=True)
+        text(titles, "Claude Usage", 20, bold=True).pack(fill="x")
+        text(titles, "Consumo de tus cuentas de Claude Code", 12, MUTED,
+             wrap=True).pack(fill="x")
 
         self.update_bar = ctk.CTkFrame(shell, fg_color=CARD, corner_radius=14, border_width=1,
                                        border_color=ACCENT)
@@ -893,16 +897,16 @@ class App(ctk.CTk):
         ctk.CTkSwitch(footer, text="Abrir al iniciar Windows", variable=self.autostart,
                       command=self.toggle_autostart, font=font(12), text_color=TEXT,
                       progress_color=ACCENT, fg_color=TRACK).pack(side="left")
-        text(footer, f"v{VERSION}", 11, MUTED).pack(side="right")
-        self.check_link = ctk.CTkButton(
-            footer, text="Buscar actualizaciones", command=self.check_now, width=0, height=26,
-            corner_radius=6, font=font(11), fg_color="transparent", hover_color=TRACK,
-            text_color=MUTED)
-        self.check_link.pack(side="right", padx=(0, 4))
         credit = ctk.CTkFrame(shell, fg_color="transparent")
         credit.pack(fill="x", pady=(6, 0))
         text(credit, "Creado por ", 11, MUTED).pack(side="left")
         text(credit, "Sergio Bernabé", 11, ACCENT, bold=True).pack(side="left")
+        text(credit, f"v{VERSION}", 11, MUTED).pack(side="right")
+        self.check_link = ctk.CTkButton(
+            credit, text="Buscar actualizaciones", command=self.check_now, width=0, height=24,
+            corner_radius=6, font=font(11), fg_color="transparent", hover_color=TRACK,
+            text_color=MUTED)
+        self.check_link.pack(side="right", padx=(0, 2))
 
         self.tray = Tray(self) if pystray else None
         if self.tray:
