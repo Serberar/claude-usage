@@ -18,7 +18,7 @@ DisableDirPage=yes
 OutputDir=dist
 OutputBaseFilename=ClaudeUsage-Setup
 SetupIconFile=claude_usage.ico
-UninstallDisplayIcon={app}\ClaudeUsage.exe
+UninstallDisplayIcon={app}\claude_usage.ico
 UninstallDisplayName=Claude Usage
 Compression=lzma2
 SolidCompression=yes
@@ -34,10 +34,13 @@ Name: "startup"; Description: "Abrir Claude Usage al iniciar Windows"
 
 [Files]
 Source: "dist\ClaudeUsage.exe"; DestDir: "{app}"; Flags: ignoreversion
+; los accesos directos usan este .ico: si usaran el del .exe, Windows enseñaría el que
+; guardó en caché para esa ruta aunque el .exe nuevo traiga otro
+Source: "claude_usage.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Claude Usage"; Filename: "{app}\ClaudeUsage.exe"
-Name: "{autodesktop}\Claude Usage"; Filename: "{app}\ClaudeUsage.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Claude Usage"; Filename: "{app}\ClaudeUsage.exe";   IconFilename: "{app}\claude_usage.ico"
+Name: "{autodesktop}\Claude Usage"; Filename: "{app}\ClaudeUsage.exe";   IconFilename: "{app}\claude_usage.ico"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
