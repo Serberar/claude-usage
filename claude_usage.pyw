@@ -26,7 +26,7 @@ try:
 except ImportError:  # sin icono en la bandeja, la ventana sigue funcionando
     pystray = None
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 REPO = "Serberar/claude-usage"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_ID = "7F4AB592-8EFE-486C-AC71-466940D30782"  # AppId de installer.iss
@@ -899,9 +899,8 @@ class App(ctk.CTk):
                       progress_color=ACCENT, fg_color=TRACK).pack(side="left")
         credit = ctk.CTkFrame(shell, fg_color="transparent")
         credit.pack(fill="x", pady=(6, 0))
-        text(credit, "Creado por ", 11, MUTED).pack(side="left")
-        text(credit, "Sergio Bernabé", 11, ACCENT, bold=True).pack(side="left")
-        text(credit, f"v{VERSION}", 11, MUTED).pack(side="right")
+        text(credit, "Creado por Sergio Bernabé", 11, MUTED).pack(side="left")
+        text(credit, f"Versión {VERSION}", 11, MUTED).pack(side="right")
         self.check_link = ctk.CTkButton(
             credit, text="Buscar actualizaciones", command=self.check_now, width=0, height=24,
             corner_radius=6, font=font(11), fg_color="transparent", hover_color=TRACK,
