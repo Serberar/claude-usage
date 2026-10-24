@@ -1,9 +1,9 @@
-# Compila dist\ClaudeUsage.exe y dist\ClaudeUsage-Setup.exe con la versión de claude_usage.pyw.
+# Compila dist\ClaudeUsage.exe y dist\ClaudeUsage-Setup.exe con la versión de version.py.
 # Sin ErrorActionPreference=Stop: pyinstaller escribe su log en stderr y PowerShell 5.1 lo
 # tomaría por un error. Se mira el código de salida de cada paso.
 Set-Location $PSScriptRoot
 
-$version = (Select-String -Path claude_usage.pyw -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+$version = (Select-String -Path version.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
 Write-Host "Compilando Claude Usage $version"
 
 python make_icon.py
