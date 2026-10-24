@@ -127,6 +127,8 @@ class Meter(ctk.CTkFrame):
                                       progress_color=TRACK)
         self.bar.pack(fill="x", pady=(6, 0))
         self.bar.set(0)
+        # raya sobre la barra: lo que deberías llevar gastado para llegar justo al reinicio
+        self.pace = ctk.CTkFrame(self, width=3, height=16, corner_radius=1, fg_color=TEXT)
         self.note = text(self, "", 11, MUTED)
         self.note.pack(fill="x", pady=(4, 0))
 
@@ -149,6 +151,13 @@ class Meter(ctk.CTkFrame):
             self.bar.pack(fill="x", pady=(6, 0), before=self.note)
         else:
             self.bar.pack_forget()
+
+    def show_pace(self, expected):
+        if expected is None or not self.bar.winfo_manager():
+            self.pace.place_forget()
+        else:
+            self.pace.place(in_=self.bar, relx=min(max(expected, 0), 100) / 100, rely=0.5,
+                            anchor="center")
 
 
 class Fold:

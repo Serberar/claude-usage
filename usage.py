@@ -100,6 +100,8 @@ def account_view(acc):
             "value": not (weekly_out and key == "sevenDay"),
             "left": not out,
             "note": window_note(window(acc, key)),
+            # cuánto deberías llevar gastado para llegar justo al reinicio (lo calcula cswap)
+            "pace": None if out else window(acc, key).get("expectedPct"),
         }
     week = window(acc, "sevenDay")
     warning = ""
@@ -117,10 +119,62 @@ def account_view(acc):
     }
 
 
-def tray_value(acc):
-    """El número del icono junto al reloj: el límite de 5 horas, o 100 si el semanal está
-    agotado (si no, enseñaría un 0 verde de una cuenta que no se puede usar)."""
-    return 100.0 if exhausted(acc, "sevenDay") else used(acc, "fiveHour")
+def tray_value(acc, shows="five"):
+    """El número del icono junto al reloj. shows (Ajustes > General): "five", el límite de 5
+    horas, o 100 si el semanal está agotado (si no, enseñaría un 0 verde de una cuenta que
+    no se puede usar); "week", el semanal; "worst", el que va peor de los dos."""
+    five, week = used(acc, "fiveHour"), used(acc, "sevenDay")
+    if shows == "week":
+        return week
+    if shows == "worst":
+        known = [value for value in (five, week) if value is not None]
+        return max(known) if known else None
+    return 100.0 if exhausted(acc, "sevenDay") else five
+
+
+def blocked(acc):
+    """No se puede usar: tiene algún límite agotado."""
+    return any(exhausted(acc, key) for key, _title in LIMITS)
+
+
+def headroom(acc):
+    """Lo que le queda al límite que va peor (None si cswap no sabe nada de la cuenta)."""
+    known = [value for value in (used(acc, key) for key, _t in LIMITS) if value is not None]
+    return 100.0 - max(known) if known else None
+
+
+def best_account(accounts, margin=10.0):
+    """La cuenta con más margen si es otra que la que está en uso y le saca al menos margin
+    puntos (por menos no compensa cambiar); si no, None."""
+    known = [acc for acc in accounts if (headroom(acc) or 0) > 0]
+    if not known:
+        return None
+    best = max(known, key=headroom)
+    active = next((acc for acc in accounts if acc.get("active")), None)
+    if best is active:
+        return None
+    if active is not None and headroom(best) - (headroom(active) or 0) < margin:
+        return None
+    return best
+
+
+def alerts(before, after, near=90.0):
+    """Avisos entre dos lecturas del consumo: la cuenta en uso llega a near en el límite de
+    5 horas, o una cuenta que estaba agotada vuelve a poder usarse."""
+    previous = {acc.get("number"): acc for acc in before}
+    messages = []
+    for acc in after:
+        prev = previous.get(acc.get("number"))
+        if prev is None:
+            continue
+        name = display_name(acc)
+        was, now = used(prev, "fiveHour") or 0, used(acc, "fiveHour") or 0
+        if acc.get("active") and was < near <= now:
+            messages.append(f"{name} ha agotado el límite de 5 horas" if now >= 100
+                            else f"{name} lleva un {now:.0f} % del límite de 5 horas")
+        if blocked(prev) and not blocked(acc):
+            messages.append(f"{name} vuelve a estar disponible")
+    return messages
 
 
 def tray_tooltip(acc):

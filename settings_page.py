@@ -11,6 +11,7 @@ import autostart
 import catalog
 import plugins
 import prerequisites
+import state
 from plugins_page import plugin_details
 from theme import ACCENT, AMBER, GREEN, MUTED, ON_ACCENT, RED, TEXT, TRACK, font
 from widgets import (LogBox, Page, big_button, button, card, entry, fold_card, fold_row, link,
@@ -90,8 +91,15 @@ class SettingsPage(Page):
         if self.plugins is not None:
             self.plugin_section.render(self.section("Plugins"), self.plugins)
         self.general_section.render(self.section("General"))
-        text(self.section("Información"), "El consumo se actualiza solo cada minuto; con ⟳ "
-             "al momento.", 12, MUTED, wrap=True).pack(fill="x", pady=(8, 0))
+        info = self.section("Información")
+        for line in ("El consumo se actualiza solo cada minuto; con ⟳ al momento.",
+                     "La raya de la barra semanal marca lo que deberías llevar gastado "
+                     "para llegar justo al reinicio: si la barra la pasa, vas rápido.",
+                     "Los avisos de Windows saltan cuando la cuenta en uso pasa del 90 % del "
+                     "límite de 5 horas y cuando una cuenta agotada vuelve a estar disponible.",
+                     "El cambio automático usa claude-swap: cambia a la cuenta con más margen "
+                     "cuando la que usas llega al límite elegido."):
+            text(info, line, 12, MUTED, wrap=True).pack(fill="x", pady=(8, 0))
 
     def section(self, title):
         return fold_card(self.body, title, self.open_sections)
@@ -344,7 +352,10 @@ class PluginForm:
 
 
 class GeneralSection:
-    """Abrir al iniciar Windows y el icono siempre visible junto al reloj."""
+    """Abrir al iniciar Windows, el icono junto al reloj, los avisos y el cambio automático."""
+
+    TRAY_SHOWS = {"five": "5 horas", "week": "Semanal", "worst": "El peor"}
+    THRESHOLDS = (80, 90, 95)
 
     def __init__(self, page):
         self.page = page
@@ -357,6 +368,48 @@ class GeneralSection:
             tray = tk.BooleanVar(value=any(entries.values()))
             switch(box, "Icono siempre visible junto al reloj", tray,
                    lambda: self.toggle_tray_icon(tray))
+        self.choice(box, "El icono marca", self.TRAY_SHOWS, "tray_shows",
+                    after=self.page.app.update_tray)
+        self.setting_switch(box, "Avisos de Windows", "notify")
+
+        auto = self.setting_switch(box, "Cambiar de cuenta sola al llegar al límite",
+                                   "auto_switch", after=lambda: show_threshold())
+        threshold = self.choice(box, "Al llegar al", {n: f"{n} %" for n in self.THRESHOLDS},
+                                "auto_threshold")
+
+        def show_threshold():
+            if auto.get():
+                threshold.pack(fill="x", pady=(8, 0))
+            else:
+                threshold.pack_forget()
+        show_threshold()
+
+    def setting_switch(self, box, label, name, after=None):
+        """Interruptor de una opción guardada (state.SETTINGS)."""
+        var = tk.BooleanVar(value=state.setting(name))
+
+        def changed():
+            state.set_setting(name, var.get())
+            if after:
+                after()
+        switch(box, label, var, changed)
+        return var
+
+    def choice(self, box, label, options, name, after=None):
+        """Fila con una etiqueta y un selector de una opción guardada; devuelve la fila."""
+        row = ctk.CTkFrame(box, fg_color="transparent")
+        row.pack(fill="x", pady=(10, 0))
+        text(row, label, 12).pack(side="left")
+        by_label = {shown: value for value, shown in options.items()}
+
+        def changed(shown):
+            state.set_setting(name, by_label[shown])
+            if after:
+                after()
+        selector = segmented(row, list(options.values()), command=changed, height=28)
+        selector.set(options.get(state.setting(name), next(iter(options.values()))))
+        selector.pack(side="right")
+        return row
 
     def toggle_autostart(self):
         self.flip(self.autostart, autostart.set_autostart, "Abrir al iniciar Windows")
