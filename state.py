@@ -26,8 +26,30 @@ def load_state():
         return {}
 
 
-def save_state(**changes):
+def _update(change):
+    """Lee, cambia y guarda de una vez: dos hilos a la vez no se pisan los cambios."""
     with _lock:
         state = load_state()
-        state.update(changes)
+        change(state)
         write_atomic(STATE_FILE, json.dumps(state, ensure_ascii=False))
+
+
+def save_state(**changes):
+    _update(lambda state: state.update(changes))
+
+
+# opciones de Ajustes > General y su valor si nunca se han tocado
+SETTINGS = {
+    "notify": True,          # avisos de Windows (cerca del límite, cuenta disponible otra vez)
+    "auto_switch": False,    # cambiar de cuenta solo al llegar al umbral (cswap auto)
+    "auto_threshold": 90,    # % del límite que va peor
+    "tray_shows": "five",    # qué marca el icono: "five", "week" o "worst"
+}
+
+
+def setting(name):
+    return load_state().get("settings", {}).get(name, SETTINGS[name])
+
+
+def set_setting(name, value):
+    _update(lambda state: state.setdefault("settings", {}).update({name: value}))

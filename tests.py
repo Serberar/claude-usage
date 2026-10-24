@@ -174,6 +174,46 @@ def test_tray_value():
     assert usage.tray_value({"usage": {}}) is None
 
 
+def acc_with(number, five, week, active=False, email=None):
+    return {"number": number, "email": email or f"c{number}@x", "active": active,
+            "usage": {"fiveHour": {"pct": five}, "sevenDay": {"pct": week}}}
+
+
+def test_tray_shows():
+    acc = acc_with(1, 30, 60)
+    assert usage.tray_value(acc, "five") == 30
+    assert usage.tray_value(acc, "week") == 60
+    assert usage.tray_value(acc, "worst") == 60
+
+
+def test_best_account():
+    # la de más margen, solo si es otra y le saca al menos 10 puntos
+    accounts = [acc_with(1, 80, 20, active=True), acc_with(2, 10, 30), acc_with(3, 0, 100)]
+    assert usage.best_account(accounts)["number"] == 2
+    accounts[0] = acc_with(1, 25, 20, active=True)  # 75 de margen contra 70: no compensa
+    assert usage.best_account(accounts) is None
+    assert usage.best_account([acc_with(1, 0, 100, active=True), acc_with(2, 0, 100)]) is None
+
+
+def test_alerts():
+    before = [acc_with(1, 85, 20, active=True), acc_with(2, 0, 100)]
+    after = [acc_with(1, 92, 21, active=True), acc_with(2, 0, 3)]
+    messages = usage.alerts(before, after)
+    assert messages == ["c1@x lleva un 92 % del límite de 5 horas", "c2@x vuelve a estar disponible"]
+    assert usage.alerts(after, after) == []  # sin cambios, sin avisos repetidos
+    assert usage.alerts([], after) == []      # la primera lectura no avisa de nada
+    assert usage.alerts(before, [acc_with(1, 100, 20, active=True)]) == [
+        "c1@x ha agotado el límite de 5 horas"]
+
+
+def test_settings(tmp):
+    state.STATE_FILE = tmp / "state.json"
+    assert state.setting("auto_threshold") == 90  # sin tocar: el valor por defecto
+    state.set_setting("auto_threshold", 80)
+    state.save_state(otra="cosa")  # guardar otra cosa no borra las opciones
+    assert state.setting("auto_threshold") == 80 and state.load_state()["otra"] == "cosa"
+
+
 def test_forget_past_windows():
     # un límite cuya recarga ya pasó sale recargado aunque cswap aún no haya vuelto a preguntar
     accounts = [{"usage": {"fiveHour": {"pct": 100.0, "resetsAt": iso(NOW - timedelta(hours=2))},

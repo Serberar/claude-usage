@@ -13,6 +13,7 @@ import customtkinter as ctk
 from PIL import Image
 
 import accounts
+import state
 import updater
 import usage
 import windows
@@ -43,6 +44,7 @@ class App(ctk.CTk):
                              args=(listener, lambda: self.post(self.show_window)),
                              daemon=True).start()
         self.busy = False          # leyendo el consumo o cambiando de cuenta
+        self.accounts = []         # la última lectura, para los avisos y el icono
         self.task_running = False  # instalando o cambiando algo (de uno en uno)
         self.pinned = False
         self.release = None
@@ -229,10 +231,15 @@ class App(ctk.CTk):
                 self.show_tab("Ajustes")
             return
         usage.forget_past_windows(account_list, datetime.now(timezone.utc))
+        before, self.accounts = self.accounts, account_list
         self.settings_page.show_accounts(account_list)
         self.usage_page.show(account_list)
-        if self.tray:
-            self.tray.update(account_list)
+        self.update_tray()
+        if self.tray and state.setting("notify"):
+            for message in usage.alerts(before, account_list):
+                self.tray.notify(message)
+        if state.setting("auto_switch") and len(account_list) > 1:
+            self.auto_switch()
         if not account_list:
             self.status.configure(text="Aún no hay cuentas: guárdalas en la pestaña Ajustes.",
                                   text_color=MUTED)
@@ -240,6 +247,30 @@ class App(ctk.CTk):
         # la hora en que cswap pidió el consumo de la cuenta en uso, no la de esta lectura
         self.status.configure(text=f"Actualizado {usage.fetched_at(account_list):%H:%M}",
                               text_color=MUTED)
+
+    def update_tray(self):
+        if self.tray:
+            self.tray.update(self.accounts, state.setting("tray_shows"))
+
+    def auto_switch(self):
+        """Ajustes > General: si la cuenta en uso llega al umbral, cswap cambia a la de más
+        margen. Una pasada tras cada lectura; así no queda nada de cswap en marcha al salir."""
+        if self.busy:
+            return
+        self.busy = True
+
+        def done(switched, error):
+            self.busy = False
+            if error:
+                self.status.configure(text=f"Cambio automático: {error}", text_color=RED)
+            elif switched:
+                if self.tray:
+                    self.tray.notify(f"Cambiado a {switched.get('email', 'otra cuenta')}: "
+                                     "la anterior estaba cerca del límite")
+                self.refresh_usage()
+
+        threshold = state.setting("auto_threshold")
+        self.run_in_background(lambda: accounts.auto_switch(threshold), done)
 
     def switch_to(self, number):
         if number is None:

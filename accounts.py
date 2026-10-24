@@ -7,10 +7,10 @@ from prerequisites import ensure
 from system import NEW_CONSOLE, StepError, find, quiet, run
 
 
-def cswap(*args, log=quiet, answer=None, timeout=60):
+def cswap(*args, log=quiet, answer=None, timeout=60, ok_codes=(0,)):
     if not find("cswap"):
         raise StepError("Falta claude-swap: instálalo desde la pestaña Ajustes.")
-    return run(["cswap", *args], log, timeout=timeout, answer=answer)
+    return run(["cswap", *args], log, timeout=timeout, answer=answer, ok_codes=ok_codes)
 
 
 def list_accounts():
@@ -20,6 +20,22 @@ def list_accounts():
 
 def switch_account(number):
     cswap("switch", str(number))
+
+
+def auto_switch(threshold):
+    """Una pasada del cambio automático de cswap (`cswap auto --once`): si la cuenta en uso
+    llega al umbral en el límite que va peor, cambia a la que tiene más margen. Devuelve la
+    cuenta a la que ha cambiado ({number, email}) o None."""
+    out = cswap("auto", "--once", "--json", "--threshold", str(threshold),
+                ok_codes=(0, 2, 3))  # 2: no hacía falta; 3: no había otra cuenta con margen
+    for line in out.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("event") == "switch" and not event.get("dryRun"):
+            return event.get("to")
+    return None
 
 
 def set_alias(number, alias, log):

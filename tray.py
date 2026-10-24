@@ -53,6 +53,11 @@ class Tray:
             yield pystray.MenuItem(f"Instalar versión {self.update_tag}",
                                    lambda: post(self.app.start_update))
         yield pystray.Menu.SEPARATOR
+        best = usage.best_account(self.accounts)
+        if best:
+            yield pystray.MenuItem(
+                f"Usar la de más margen ({usage.display_name(best)})",
+                lambda: post(lambda: self.app.switch_to(best.get("number"))))
         for acc in self.accounts:
             yield pystray.MenuItem(
                 f"Usar {usage.display_name(acc)}",
@@ -63,19 +68,23 @@ class Tray:
         yield pystray.Menu.SEPARATOR
         yield pystray.MenuItem("Salir", lambda: post(self.app.quit_app))
 
-    def update(self, accounts):
+    def update(self, accounts, shows):
+        """shows: qué marca el icono (ver usage.tray_value)."""
         self.accounts = accounts
         active = next((a for a in accounts if a.get("active")), None)
         if active:
-            self.icon.icon = tray_image(usage.tray_value(active))
+            self.icon.icon = tray_image(usage.tray_value(active, shows))
             self.icon.title = usage.tray_tooltip(active)
         self.icon.update_menu()
 
     def update_available(self, tag):
         self.update_tag = tag
         self.icon.update_menu()
+        self.notify(f"Hay una versión nueva: {tag}")
+
+    def notify(self, message):
         try:
-            self.icon.notify(f"Hay una versión nueva: {tag}", "Claude Usage")
+            self.icon.notify(message, "Claude Usage")
         except Exception:  # no en todos los Windows salen los avisos
             pass
 

@@ -6,7 +6,8 @@ Lee las cuentas que gestionas con [claude-swap](https://github.com/realiti4/clau
 
 - **Límite de 5 horas** y **límite semanal**: barras que se van llenando con el consumo (verde → amarillo → naranja → rojo).
 - Cuándo se recarga cada límite y cuánto falta.
-- Qué cuenta está activa y un botón para cambiar a otra.
+- En la barra semanal, una raya con lo que deberías llevar gastado para llegar justo al reinicio.
+- Qué cuenta está activa y un botón para cambiar a otra. Si otra tiene claramente más margen, un aviso arriba para pasarte a ella.
 
 Además deja un **icono junto al reloj** con el % consumido de la cuenta activa, del color que toque. Con doble clic se abre la ventana y con clic derecho puedes actualizar, cambiar de cuenta o salir.
 
@@ -18,7 +19,7 @@ Todo se maneja desde la propia ventana, sin terminal:
 - **Ajustes** (cada parte se despliega por separado):
   - **Tus cuentas**: si falta Claude Code o claude-swap, la app los descarga e instala. Desde ahí guardas la cuenta actual, añades otra (se abre el inicio de sesión de Claude), le pones un alias o la quitas. Con una sola cuenta funciona igual.
   - **Plugins**: instalar y desinstalar cada herramienta, cambiar su ficha y añadir otros plugins de Claude Code desde su repositorio de GitHub. Si alguna necesita algo más (Node, winget…), lo instala antes.
-  - **General**: abrir al iniciar Windows y que el icono se vea siempre junto al reloj.
+  - **General**: abrir al iniciar Windows; que el icono se vea siempre junto al reloj y qué marca (5 horas, semanal o el que vaya peor); avisos de Windows cuando la cuenta en uso pasa del 90 % del límite de 5 horas o una cuenta agotada vuelve a estar disponible; y cambiar de cuenta sola al llegar al 80, 90 o 95 % (con `cswap auto`).
 - **Actualizaciones**: al arrancar mira si hay una versión nueva en Releases y, con un clic, se descarga, se comprueba que es la publicada (su huella SHA-256), se reemplaza y se vuelve a abrir.
 - Solo se abre una vez: si ya está abierta, al pulsar el icono aparece la ventana que ya había.
 

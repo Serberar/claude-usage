@@ -4,7 +4,7 @@ import customtkinter as ctk
 
 import usage
 from theme import ACCENT, AMBER, BORDER, MUTED
-from widgets import Meter, Page, button, card, pill, text
+from widgets import Meter, Page, button, card, notice, pill, text
 
 
 class AccountCard:
@@ -61,6 +61,7 @@ class AccountCard:
             meter.heading.configure(text=shown["title"])
             meter.show(shown["used"])
             meter.show_bar(shown["bar"])
+            meter.show_pace(shown["pace"])
             if not shown["value"]:
                 meter.value.configure(text="")
             if not shown["left"] or not shown["value"]:
@@ -85,6 +86,10 @@ class UsagePage(Page):
         super().__init__(master)
         self.on_switch = on_switch
         self.cards = []
+        self.best = None
+        # arriba, solo si otra cuenta tiene claramente más margen que la que está en uso
+        self.best_note, self.best_text, _button = notice(
+            self.body, "", "Usar", lambda: self.best and on_switch(self.best.get("number")))
 
     def show(self, accounts):
         while len(self.cards) < len(accounts):
@@ -93,6 +98,13 @@ class UsagePage(Page):
             self.cards.pop().destroy()
         for account_card, acc in zip(self.cards, accounts):
             account_card.update(acc)
+        self.best = usage.best_account(accounts)
+        self.best_note.pack_forget()
+        if self.best and self.cards:
+            self.best_text.configure(
+                text=f"{usage.display_name(self.best)} tiene más margen "
+                     f"(le queda un {usage.headroom(self.best):.0f} %).")
+            self.best_note.pack(fill="x", pady=(0, 12), before=self.cards[0].frame)
 
     def tick(self):
         for account_card in self.cards:
