@@ -125,9 +125,17 @@ def test_plugin_form():
                                          name=""), "8,5 %", set(), custom=True)
     assert item["plugin"] == "caveman" and item["name"] == "caveman" and item["saving"] == 0.085
     assert catalog.plugin_from_form(base, "", set(), custom=False)["saving"] is None
+    # un rango se guarda como rango, se escribe igual y la barra cuenta su punto medio
+    ranged = catalog.plugin_from_form(base, "45-53 %", set(), custom=False)["saving"]
+    assert ranged == [0.45, 0.53] and plugins.saving_text(ranged) == "45-53"
+    assert plugins.saving_text(0.085) == "8,5" and plugins.saving_text(None) == ""
+    tool = plugins.Tool("x", "", "", "", saving=ranged)
+    assert abs(plugins.estimated_spend([tool]) - 0.51) < 1e-9
     for repo, plugin, saving, taken in (("sin-barra", "", "", set()),
                                         ("a/b", "--scope", "", set()),  # parecería una opción
                                         ("a/b", "", "150", set()),
+                                        ("a/b", "", "53-45", set()),
+                                        ("a/b", "", "1-2-3", set()),
                                         ("a/b", "", "mucho", set()),
                                         ("a/b", "", "", {"b"})):
         try:

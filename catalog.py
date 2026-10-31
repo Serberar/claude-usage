@@ -17,11 +17,12 @@ TOOLS = [
                     "/compact, y auditoría de tokens.",
         pros="Sustituye a Caveman y Ponytail con un solo bloque de reglas por sesión. Reduce "
              "las capturas antes de que Claude las lea y su banda deja compactar al acabar "
-             "una tarea sin cortarla.",
+             "una tarea sin cortarla. Medido por su autor: entre un 45 % y un 53 % menos, "
+             "con el ajuste que recomienda (CLAUDE_CODE_AUTO_COMPACT_WINDOW a 200K).",
         cons="Sin pruebas independientes. Reducir capturas solo funciona en Windows. No "
              "comprime la salida de los comandos: para eso va RTK. Limpiar con /clear "
              "pierde la conversación actual.",
-        quality="sin_probar", recommended=True,
+        saving=(0.45, 0.53), quality="sin_probar", recommended=True,
     ),
     Rtk(
         name="RTK",
@@ -112,13 +113,16 @@ def plugin_from_form(values, saving_text, taken, custom):
     enseña al usuario.
     """
     item = dict(values)
+    saving = saving_text.replace(",", ".").replace("%", "").strip()
     try:
-        saving = saving_text.replace(",", ".").rstrip("%").strip()
-        item["saving"] = float(saving) / 100 if saving else None
+        # un número (8,5) o un rango (3-17)
+        parts = [float(part) / 100 for part in saving.split("-")] if saving else []
     except ValueError:
-        item["saving"] = -1
-    if item["saving"] is not None and not 0 <= item["saving"] <= 1:
-        raise ValueError("El ahorro es un número entre 0 y 100, o vacío si no se sabe.")
+        parts = [-1]
+    if len(parts) > 2 or not all(0 <= part <= 1 for part in parts) or parts != sorted(parts):
+        raise ValueError("El ahorro es un número entre 0 y 100, un rango como 3-17, o vacío "
+                         "si no se sabe.")
+    item["saving"] = None if not parts else parts[0] if len(parts) == 1 else parts
     if not custom:
         return {key: item[key] for key in FICHA}
     parts = item["repo"].split("/")

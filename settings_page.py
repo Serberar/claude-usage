@@ -314,10 +314,9 @@ class PluginForm:
         self.description = self.field(entry, "Qué hace", tool.description if tool else "")
         self.pros = self.field(textbox, "Lo bueno", tool.pros if tool else "")
         self.cons = self.field(textbox, "Lo malo", tool.cons if tool else "")
-        saving = tool.saving if tool else None
         self.saving = self.field(entry, "Ahorro aproximado en %",
-                                 "" if saving is None else f"{saving * 100:g}",
-                                 "vacío si no se sabe")
+                                 plugins.saving_text(tool.saving if tool else None),
+                                 "un número, un rango como 3-17, o vacío si no se sabe")
         text(self.form, "Calidad del código", 11, MUTED).pack(fill="x", pady=(8, 2))
         self.quality = segmented(self.form, list(plugins.QUALITY.values()))
         self.quality.set(plugins.QUALITY[tool.quality if tool else "sin_probar"])

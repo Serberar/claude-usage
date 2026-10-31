@@ -36,8 +36,8 @@ def plugin_details(master, tool):
         text(row, value, 12, text_color, wrap=True).pack(side="left", fill="x", expand=True)
     if tool.saving is None:
         saving, color = "Ahorro sin medir", MUTED
-    elif tool.saving > 0:
-        saving, color = f"Ahorra ≈{tool.saving * 100:g} %".replace(".", ","), GREEN
+    elif plugins.saving_range(tool.saving)[1] > 0:
+        saving, color = f"Ahorra ≈{plugins.saving_text(tool.saving)} %", GREEN
     else:
         saving, color = "No ahorra", MUTED
     text(master, saving, 12, color, bold=True).pack(fill="x", pady=(10, 0))
