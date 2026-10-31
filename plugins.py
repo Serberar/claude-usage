@@ -278,8 +278,22 @@ def estimated_spend(tools_enabled):
     """
     spend = 1.0
     for tool in tools_enabled:
-        spend *= 1 - (tool.saving or 0)
+        low, high = saving_range(tool.saving) or (0, 0)
+        spend *= 1 - (low + high) / 2  # de un rango, el punto medio
     return spend
+
+
+def saving_range(saving):
+    """(mínimo, máximo) del ahorro, o None si no se sabe. saving es un número o un rango."""
+    if saving is None:
+        return None
+    return tuple(saving) if isinstance(saving, (list, tuple)) else (saving, saving)
+
+
+def saving_text(saving):
+    """El ahorro en %, como se escribe: "8,5", "3-17" o "" si no se sabe."""
+    values = dict.fromkeys(saving_range(saving) or ())  # "8,5", no "8,5-8,5"
+    return "-".join(f"{value * 100:g}" for value in values).replace(".", ",")
 
 
 def check_tool(tool, expected):
