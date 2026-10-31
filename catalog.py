@@ -4,7 +4,7 @@ editadas y plugins añadidos desde GitHub."""
 import copy
 import re
 
-from plugins import ClaudeMdRules, ContextCompress, CustomPlugin, Plugin, Rtk
+from plugins import CustomPlugin, Plugin, Rtk
 from state import load_state, save_state
 
 FICHA = ("description", "pros", "cons", "saving", "quality")  # lo que se edita en Ajustes
@@ -12,57 +12,26 @@ NAME = re.compile(r"\w[\w.-]*")  # sin guion delante: el comando lo tomaría por
 
 TOOLS = [
     Plugin(
-        "ponytail@ponytail", "DietrichGebert/ponytail", name="Ponytail",
-        description="Hace que Claude escriba solo el código necesario, sin complicarlo.",
-        pros="El que mejor sale en pruebas independientes (JetBrains): ≈10 % menos de "
-             "coste por tarea. Menos código que revisar.",
-        cons="En Windows hay un fallo conocido que puede dejar cada mensaje parado unos "
-             "segundos. Ahorra menos de lo que anuncia (20 %).",
-        saving=0.10, quality="sin_probar", has_options=True,
-    ),
-    Plugin(
-        "caveman@caveman", "JuliusBrussee/caveman", name="Caveman",
-        description="Hace que las respuestas de Claude sean mucho más cortas.",
-        pros="JetBrains midió ≈8,5 % menos tokens sin perder calidad en el código.",
-        cons="Respuestas telegráficas, a veces difíciles de leer. Añade instrucciones a "
-             "cada mensaje: en tareas cortas puede no ahorrar nada. Anuncia 65 %.",
-        saving=0.085,
-    ),
-    ClaudeMdRules(
-        "https://raw.githubusercontent.com/drona23/claude-token-efficient/main/CLAUDE.md",
-        "claude-token-efficient.md", name="claude-token-efficient",
-        description="Unas reglas en tu CLAUDE.md para que Claude sea más directo.",
-        pros="Sin programas ni riesgos: es solo texto y se quita al momento. En una "
-             "prueba bajó ≈40 % los tokens.",
-        cons="Esa prueba es una sola y en un proyecto pequeño: aquí contamos solo un 10 % "
-             "por prudencia. Se solapa con Caveman y puede chocar con tu CLAUDE.md.",
-        saving=0.10, quality="sin_probar",
-    ),
-    Plugin(
-        "claude-magic-compact@magic-compact", "aerovato/magic-compact",
-        name="Magic Compact",
-        description="Conserva el contexto útil en sesiones largas al compactar.",
-        pros="En sesiones largas, al compactar se pierde menos de lo que estabas haciendo.",
-        cons="Sin pruebas independientes. Si resume mal, Claude puede olvidar parte de lo "
-             "que estabais haciendo. En sesiones cortas no aporta nada.",
-        quality="sin_probar",
-    ),
-    ContextCompress(
-        name="context-compress",
-        description="Comprime lo que devuelven las herramientas para gastar menos contexto.",
-        pros="Las salidas largas (logs, JSON, webs) entran comprimidas y lo completo se "
-             "puede buscar después.",
-        cons="Bloquea WebFetch y obliga a usar sus herramientas, que a veces no están "
-             "cargadas. Necesita Node. Sin pruebas independientes.",
-        quality="sin_probar",
+        "token-diet@token-diet", "Serberar/token-diet", name="token-diet",
+        description="Ahorra tokens: reglas compactas, capturas reducidas, botones de /clear y "
+                    "/compact, y auditoría de tokens.",
+        pros="Sustituye a Caveman y Ponytail con un solo bloque de reglas por sesión. Reduce "
+             "las capturas antes de que Claude las lea y su banda deja compactar al acabar "
+             "una tarea sin cortarla.",
+        cons="Sin pruebas independientes. Reducir capturas solo funciona en Windows. No "
+             "comprime la salida de los comandos: para eso va RTK. Limpiar con /clear "
+             "pierde la conversación actual.",
+        quality="sin_probar", recommended=True,
     ),
     Rtk(
         name="RTK",
         description="Quita el ruido de lo que la terminal le devuelve a Claude Code.",
-        pros="Resume la salida de git, tests y similares antes de que la lea Claude.",
-        cons="JetBrains midió que no ahorra: con esfuerzo bajo sale ≈7,6 % más caro. "
-             "En Windows su enganche funciona peor que en Linux o WSL.",
-        saving=0.0,
+        pros="Resume la salida de git, tests y similares antes de que la lea Claude. En un "
+             "uso real quitó ≈29 % de esa salida. Complementa a token-diet, que no la toca.",
+        cons="La salida de los comandos es poca parte del coste, así que en total ahorra "
+             "poco. JetBrains no vio ahorro con esfuerzo bajo (≈7,6 % más caro). En Windows "
+             "su enganche funciona peor que en Linux o WSL.",
+        saving=0.01, recommended=True,
     ),
 ]
 
@@ -115,6 +84,24 @@ def all_tools():
                      cons=item.get("cons", ""), saving=item.get("saving"),
                      quality=item.get("quality", "sin_probar"))
         for item in custom_plugins()]
+
+
+def detected_plugins(installed, tools):
+    """Los plugins de Claude Code instalados por fuera de la app, para verlos como uno más.
+    Llamar después de status() en tools: así los añadidos en Ajustes ya saben su id completo."""
+    known = {getattr(tool, "plugin_id", None) for tool in tools}
+    names = {tool.name for tool in tools}
+    found = []
+    for plugin_id, info in installed.items():
+        if plugin_id in known:
+            continue
+        name = plugin_id.split("@")[0]
+        tool = Plugin(plugin_id, info.get("repo") or "", name=plugin_id if name in names else name,
+                      description="Instalado fuera de la app.", pros="", cons="",
+                      quality="sin_probar")
+        tool.detected = True
+        found.append(tool)
+    return found
 
 
 def plugin_from_form(values, saving_text, taken, custom):

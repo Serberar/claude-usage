@@ -227,9 +227,13 @@ class PluginsSection:
         state = text(head, "Instalado" if installed else "No instalado", 12,
                      GREEN if installed else MUTED)
         state.pack(side="right")
+        tags = [state]
+        if tool.recommended:
+            tags.append(text(head, "Recomendado", 12, ACCENT, bold=True))
+            tags[-1].pack(side="right", padx=(0, 8))
         name = text(head, tool.name, 13, bold=True, wrap=True)
         name.pack(side="left", fill="x", expand=True)
-        fold.clickable(head, name, state)
+        fold.clickable(head, name, *tags)
         self.panel(inner, tool, installed)
 
     def panel(self, inner, tool, installed):
@@ -251,7 +255,8 @@ class PluginsSection:
             for child in inner.winfo_children()[1:]:
                 child.destroy()
             PluginForm(self, inner, tool, lambda: self.panel(inner, tool, installed))
-        button(buttons, "Editar", edit).pack(side="left", padx=(0, 6))
+        if not tool.detected:
+            button(buttons, "Editar", edit).pack(side="left", padx=(0, 6))
         if tool.edited:
             link(inner, "Volver a la ficha original", lambda: self.restore(tool))
         if tool.custom and not installed:
