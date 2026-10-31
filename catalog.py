@@ -22,7 +22,7 @@ TOOLS = [
         cons="Sin pruebas independientes. Reducir capturas solo funciona en Windows. No "
              "comprime la salida de los comandos: para eso va RTK. Limpiar con /clear "
              "pierde la conversación actual.",
-        saving=(0.45, 0.53), quality="sin_probar", recommended=True,
+        saving=(0.45, 0.53), quality="no_afecta", recommended=True,
     ),
     Rtk(
         name="RTK",
