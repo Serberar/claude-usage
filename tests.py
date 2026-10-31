@@ -92,6 +92,20 @@ def test_custom_plugins(tmp):
     assert catalog.custom_plugins() == []
 
 
+def test_detected_plugins(tmp):
+    # lo instalado por fuera sale como uno más; lo del catálogo no se repite
+    state.STATE_FILE = tmp / "state.json"
+    tools = catalog.all_tools()
+    installed = {"token-diet@token-diet": {"enabled": True, "repo": "Serberar/token-diet"},
+                 "caveman@caveman": {"enabled": False, "repo": None},
+                 "token-diet@otro": {"enabled": True, "repo": "x/token-diet"}}
+    for tool in tools:
+        tool.status(installed)
+    found = catalog.detected_plugins(installed, tools)
+    assert [t.name for t in found] == ["caveman", "token-diet@otro"]  # sin chocar de nombre
+    assert all(t.detected for t in found) and found[0].status(installed) == "disabled"
+
+
 def test_plugin_edits(tmp):
     # una ficha del catálogo cambiada se aplica sin tocar el catálogo y se puede deshacer
     state.STATE_FILE = tmp / "state.json"

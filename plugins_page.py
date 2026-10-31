@@ -10,7 +10,7 @@ import claude_session
 import catalog
 import plugins
 import ponytail
-from theme import AMBER, GREEN, MUTED, ORANGE, RED, TRACK
+from theme import ACCENT, AMBER, GREEN, MUTED, ORANGE, RED, TRACK
 from widgets import (Fold, LogBox, Meter, Page, auto_wrap, button, card, flat_button, notice,
                      segmented, switch, text)
 
@@ -91,7 +91,9 @@ class PluginsPage(Page):
         def work():
             installed = plugins.plugin_list()
             statuses = [tool.status(installed) for tool in tools]
-            return tools, statuses, installed, claude_session.restart_needed()
+            found = catalog.detected_plugins(installed, tools)
+            statuses += [tool.status(installed) for tool in found]
+            return tools + found, statuses, installed, claude_session.restart_needed()
         self.app.run_in_background(work, self.show_status)
 
     def show_status(self, result, error):
@@ -131,9 +133,13 @@ class PluginsPage(Page):
         label, color = self.LABELS[status]
         state = text(head, label, 12, color)
         state.pack(side="right")
+        tags = [state]
+        if tool.recommended:
+            tags.append(text(head, "Recomendado", 12, ACCENT, bold=True))
+            tags[-1].pack(side="right", padx=(0, 8))
         name = text(head, tool.name, 15, bold=True)
         name.pack(side="left")
-        fold.clickable(head, name, state)
+        fold.clickable(head, name, *tags)
 
         plugin_details(content, tool)
         if tool.has_options:

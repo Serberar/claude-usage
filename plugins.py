@@ -78,15 +78,18 @@ class Tool:
 
     status() devuelve "missing", "enabled" o "disabled". saving es la parte de tokens que
     ahorra según las pruebas publicadas (None si nadie lo ha medido) y quality, lo que se
-    sabe de cómo afecta a la calidad del código (una clave de QUALITY).
+    sabe de cómo afecta a la calidad del código (una clave de QUALITY). recommended lo marca
+    como el que conviene instalar.
     """
 
     custom = False
     edited = False  # ficha del catálogo cambiada en Ajustes
+    detected = False  # plugin instalado por fuera de la app: sin ficha que editar
 
     def __init__(self, name, description, pros, cons, saving=None, quality="no_afecta",
-                 has_options=False):
+                 has_options=False, recommended=False):
         self.name = name
+        self.recommended = recommended
         self.description = description
         self.pros = pros
         self.cons = cons
