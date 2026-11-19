@@ -55,6 +55,10 @@ Filename: "{app}\ClaudeUsage.exe"; Description: "Abrir Claude Usage"; \
   Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+; quita el relevo de la configuración de la app de escritorio: si no, intentaría arrancar
+; un .exe que ya no existe
+Filename: "{app}\ClaudeUsage.exe"; Parameters: "--desinstalar"; Flags: runhidden waituntilterminated; \
+  RunOnceId: "QuitarRelevo"
 ; suele estar abierta en la bandeja: sin cerrarla no se puede borrar el .exe
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM ClaudeUsage.exe /F"; Flags: runhidden; \
   RunOnceId: "CerrarClaudeUsage"

@@ -3,6 +3,8 @@
 import re
 import time
 
+import desktop
+
 from state import load_state, save_state
 from system import StepError, run
 
@@ -10,9 +12,12 @@ from system import StepError, run
 def claude_sessions():
     """(PID, cuándo se abrió en segundos Unix) de cada sesión de Claude Code abierta.
 
-    Si Windows no deja leer la hora de inicio, cuenta como 0 (abierta desde siempre).
+    Si Windows no deja leer la hora de inicio, cuenta como 0 (abierta desde siempre). La app
+    de escritorio también se llama claude.exe: esa no cuenta (antes se cerraba con esto).
     """
-    script = ("Get-Process claude -ErrorAction SilentlyContinue | ForEach-Object { "
+    skip = "|".join(re.escape(str(p)) for p in (desktop.INSTALL, desktop.DATA))
+    script = ("Get-Process claude -ErrorAction SilentlyContinue | "
+              f"Where-Object {{ \"$($_.Path)\" -notmatch '^({skip})' }} | ForEach-Object {{ "
               "$t = try { [DateTimeOffset]::new($_.StartTime).ToUnixTimeSeconds() } catch { 0 }; "
               "\"$($_.Id) $t\" }")
     try:

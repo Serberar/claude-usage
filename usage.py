@@ -6,6 +6,9 @@ DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 LIMITS = (("fiveHour", "Límite de 5 horas"), ("sevenDay", "Límite semanal"))
 RELOADED_NOTE = "recargado · el uso nuevo sale en unos minutos"
+# usageStatus de cswap cuando la sesión de Claude Code de la cuenta ya no vale
+RELOGIN = ("relogin_required", "token_expired", "no_credentials")
+EXPIRES_SOON_DAYS = 3
 
 
 def parse_time(value):
@@ -48,7 +51,48 @@ def window_note(window):
     """Debajo de cada barra: cuándo se recarga ese límite."""
     if window.get("reloaded"):
         return RELOADED_NOTE
-    return reset_label(parse_time(window.get("resetsAt")))
+    reset = parse_time(window.get("resetsAt"))
+    desktop_at = parse_time(window.get("desktopAt"))
+    if desktop_at and not reset:
+        return f"según la app de escritorio, a las {desktop_at.astimezone():%H:%M}"
+    return reset_label(reset)
+
+
+def add_desktop(accounts, latest, desktop_org):
+    """Lo que sabe la app de escritorio. latest: el último dato de consumo que apuntó de
+    cada organización ({org: {t, u: {fh, sd}}}); desktop_org: con la que está abierta.
+
+    Marca la cuenta que usa la app de escritorio y, si su dato es más nuevo que el de
+    cswap (o cswap no tiene ninguno, por ejemplo porque su sesión de Claude Code caducó),
+    pone el de la app de escritorio. Los límites son de la cuenta, no del programa: el %
+    es el mismo en los dos. La app de escritorio lo apunta en cuanto se agota y cswap
+    tarda hasta 10 minutos: así el cambio automático no se queda esperando."""
+    for acc in accounts:
+        org = acc.get("organizationUuid")
+        acc["desktop"] = bool(org) and org == desktop_org
+        sample = latest.get(org) if org else None
+        if not sample:
+            continue
+        at = datetime.fromtimestamp(sample["t"] / 1000, timezone.utc)
+        fetched = parse_time(acc.get("usageFetchedAt"))
+        current = acc.get("usage") if isinstance(acc.get("usage"), dict) else None
+        if current and fetched and fetched >= at:
+            continue
+        old = current or acc.get("lastGoodUsage") or {}
+        merged = {}
+        for key, short in (("fiveHour", "fh"), ("sevenDay", "sd")):
+            pct = sample["u"].get(short)
+            if not isinstance(pct, (int, float)):
+                continue
+            merged[key] = {"pct": float(pct), "desktopAt": at.isoformat()}
+            # la hora de recarga no la apunta; vale la última que vio cswap si es posterior
+            reset = (old.get(key) or {}).get("resetsAt")
+            if parse_time(reset) and parse_time(reset) > at:
+                merged[key]["resetsAt"] = reset
+        if merged:
+            acc["usage"] = merged
+            acc["usageFetchedAt"] = at.isoformat()
+            acc["usageSource"] = "desktop"
 
 
 def forget_past_windows(accounts, now):
@@ -82,7 +126,22 @@ def display_name(acc):
     return acc.get("alias") or acc.get("email", "?")
 
 
-def account_view(acc):
+def needs_login(acc):
+    """La sesión de Claude Code de esta cuenta caducó: cswap no puede leer su consumo ni
+    pasarse a ella hasta que se vuelva a iniciar."""
+    return acc.get("usageStatus") in RELOGIN
+
+
+def login_expires_soon(acc, now=None, days=EXPIRES_SOON_DAYS):
+    """Cuándo caduca la sesión si es en menos de days días (None si no)."""
+    expires = parse_time(acc.get("loginExpiresAt"))
+    now = now or datetime.now(timezone.utc)
+    if expires and (expires - now).total_seconds() < days * 86400:
+        return expires
+    return None
+
+
+def account_view(acc, now=None):
     """Lo que enseña la tarjeta de una cuenta en la pestaña Uso.
 
     Con el semanal agotado no se puede usar hasta que se recargue: basta con decirlo y
@@ -105,15 +164,29 @@ def account_view(acc):
         }
     week = window(acc, "sevenDay")
     warning = ""
-    if acc.get("usageStatus") not in (None, "ok"):
-        warning = f"⚠ {acc.get('usageStatus')}"
+    relogin = needs_login(acc)
+    expires = None if relogin else login_expires_soon(acc, now)
+    if relogin:
+        warning = "⚠ La sesión de Claude Code de esta cuenta caducó."
+        if acc.get("usageSource") == "desktop":
+            warning += " El consumo es el que apunta la app de escritorio."
+    elif expires:
+        when = expires.astimezone()
+        warning = (f"⚠ La sesión de Claude Code de esta cuenta caduca el "
+                   f"{DIAS[when.weekday()]} {when.day} {MESES[when.month - 1]} a las {when:%H:%M}.")
+    elif acc.get("usageStatus") not in (None, "ok"):
+        warning = f"⚠ cswap no puede leer el consumo ({acc.get('usageStatus')})"
     elif week.get("willLastToReset") is False and not weekly_out:
         warning = "⚠ a este ritmo no llega al reinicio semanal"
     return {
         "name": display_name(acc),
         "email": acc.get("email", "") if acc.get("alias") else None,  # sin alias ya es el nombre
         "active": bool(acc.get("active")),
-        "can_switch": not acc.get("active") and not weekly_out,
+        "can_switch": not acc.get("active") and not weekly_out and not relogin,
+        "desktop": bool(acc.get("desktop")),
+        "can_use_on_desktop": not acc.get("desktop") and not weekly_out
+                              and bool(acc.get("organizationUuid")),
+        "login": relogin or bool(expires),
         "meters": meters,
         "warning": warning,
     }
@@ -146,7 +219,8 @@ def headroom(acc):
 def best_account(accounts, margin=10.0):
     """La cuenta con más margen si es otra que la que está en uso y le saca al menos margin
     puntos (por menos no compensa cambiar); si no, None."""
-    known = [acc for acc in accounts if (headroom(acc) or 0) > 0]
+    # con la sesión caducada cswap no puede pasarse a ella: primero hay que iniciarla
+    known = [acc for acc in accounts if (headroom(acc) or 0) > 0 and not needs_login(acc)]
     if not known:
         return None
     best = max(known, key=headroom)
@@ -174,7 +248,49 @@ def alerts(before, after, near=90.0):
                             else f"{name} lleva un {now:.0f} % del límite de 5 horas")
         if blocked(prev) and not blocked(acc):
             messages.append(f"{name} vuelve a estar disponible")
+        if needs_login(acc) and not needs_login(prev):
+            messages.append(f"La sesión de {name} caducó: pulsa «Iniciar sesión» en su tarjeta")
+        elif login_expires_soon(acc) and not login_expires_soon(prev) and not needs_login(acc):
+            messages.append(f"La sesión de {name} caduca en menos de {EXPIRES_SOON_DAYS} días: "
+                            "pulsa «Iniciar sesión» en su tarjeta para que no se pare")
     return messages
+
+
+def desktop_near_limit(before, after, near=90.0):
+    """La cuenta de la app de escritorio acaba de pasar de near en algún límite (es el
+    momento de guardar el relevo de la conversación), o None."""
+    previous = {acc.get("number"): acc for acc in before}
+    for acc in after:
+        prev = previous.get(acc.get("number"))
+        if not acc.get("desktop") or prev is None:
+            continue
+        for key, _title in LIMITS:
+            if (used(prev, key) or 0) < near <= (used(acc, key) or 0) < 100:
+                return acc
+    return None
+
+
+def desktop_target(accounts, has_profile):
+    """Cambio automático de la app de escritorio: si su cuenta está agotada, la cuenta con
+    más margen que ya tenga sesión guardada para la app (si no, saldría la pantalla de
+    inicio de sesión en vez de poder seguir).
+
+    Devuelve (cuenta, None) si toca cambiar; (None, aviso) si toca pero a las cuentas con
+    margen les falta la sesión guardada; y (None, None) si no toca."""
+    current = next((acc for acc in accounts if acc.get("desktop")), None)
+    if current is None or not blocked(current):
+        return None, None
+    free = [acc for acc in accounts if acc is not current and not blocked(acc)
+            and (headroom(acc) or 0) > 0]
+    ready = [acc for acc in free if has_profile(acc.get("organizationUuid"))]
+    if ready:
+        return max(ready, key=headroom), None
+    if free:
+        best = max(free, key=headroom)
+        return None, (f"La app de escritorio se ha agotado y {display_name(best)} tiene "
+                      "margen, pero aún no la has usado ahí: pulsa «Usar ahí» en su tarjeta "
+                      "(solo hace falta la primera vez)")
+    return None, None
 
 
 def tray_tooltip(acc):

@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from applog import log as log_file
+
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
 LOCAL_BIN = Path.home() / ".local" / "bin"
@@ -71,14 +73,19 @@ def run(args, log=quiet, timeout=900, answer=None, ok_codes=(0,)):
             input=answer, stdin=None if answer else subprocess.DEVNULL,
         )
     except FileNotFoundError:
+        log_file.warning("no encuentro %s", args[0])
         raise StepError(f"no encuentro {args[0]}") from None
     except subprocess.TimeoutExpired:
+        log_file.warning("%s tardó más de %s s", " ".join(args[:2]), timeout)
         raise StepError(f"{args[0]} tardó demasiado") from None
     for line in (proc.stdout + proc.stderr).strip().splitlines()[-12:]:
         log("  " + line)
     if proc.returncode not in ok_codes:
         detail = (proc.stderr or proc.stdout).strip().splitlines()
-        raise StepError(detail[-1] if detail else f"{args[0]} falló (código {proc.returncode})")
+        message = detail[-1] if detail else f"{args[0]} falló (código {proc.returncode})"
+        # solo el programa y la orden: los argumentos pueden llevar un email
+        log_file.warning("%s: código %s: %s", " ".join(args[:2]), proc.returncode, message)
+        raise StepError(message)
     return proc.stdout
 
 

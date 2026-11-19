@@ -1,10 +1,11 @@
 """La ventana: cabecera, pestañas y pie. Coordina el refresco del consumo, las tareas de
 fondo, el icono de la bandeja y las actualizaciones de la app."""
 
+import json
 import queue
 import sys
 import threading
-import traceback
+import time
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,9 @@ import customtkinter as ctk
 from PIL import Image
 
 import accounts
+from applog import log
+import desktop
+import relay_mcp
 import state
 import updater
 import usage
@@ -30,6 +34,9 @@ REFRESH_MS = 60_000      # cada cuánto se vuelve a leer el consumo de cswap
 TICK_MS = 30_000         # cada cuánto avanzan las cuentas atrás
 POLL_MS = 150            # cada cuánto se recoge lo que dejan los hilos de fondo
 UPDATE_CHECK_MS = 6 * 3600_000  # cada cuánto se mira si hay versión nueva
+DESKTOP_AUTO_PAUSE = 15 * 60    # tras cambiar sola la app de escritorio, no repetir en tanto
+SWITCH_RETRY_MS = 500           # cambiar de cuenta mientras se lee el consumo: se reintenta…
+SWITCH_RETRIES = 120            # …durante un minuto como mucho
 WIDTH = 360
 
 
@@ -43,7 +50,10 @@ class App(ctk.CTk):
             threading.Thread(target=windows.serve_other_instances,
                              args=(listener, lambda: self.post(self.show_window)),
                              daemon=True).start()
-        self.busy = False          # leyendo el consumo o cambiando de cuenta
+        self.busy = False          # leyendo el consumo o cambiando de cuenta (segundos)
+        # iniciar sesión o cambiar la app de escritorio (minutos): mientras tanto el consumo
+        # se sigue leyendo, pero no se cambia de cuenta solo
+        self.account_task = None
         self.accounts = []         # la última lectura, para los avisos y el icono
         self.task_running = False  # instalando o cambiando algo (de uno en uno)
         self.pinned = False
@@ -82,6 +92,7 @@ class App(ctk.CTk):
         self.after(TICK_MS, self.tick)
         self.after(5000, updater.remove_update_leftovers)
         self.after(3000, self.check_for_update)
+        self.after(2000, refresh_relay_entry)
 
     # ── construir ──
 
@@ -108,7 +119,9 @@ class App(ctk.CTk):
         self.tabs.pack(fill="x", pady=(0, 14))
         pages = ctk.CTkFrame(shell, fg_color="transparent")
         pages.pack(fill="both", expand=True)
-        self.usage_page = UsagePage(pages, self.switch_to)
+        self.usage_page = UsagePage(pages, {
+            "switch": self.switch_to, "desktop": self.use_on_desktop,
+            "login": self.relogin, "desktop_installed": desktop.installed})
         self.settings_page = SettingsPage(pages, self)
         self.plugins_page = PluginsPage(pages, self, on_status=self.settings_page.show_plugins)
         self.tab_pages = {"Uso": self.usage_page, "Plugins": self.plugins_page,
@@ -173,8 +186,16 @@ class App(ctk.CTk):
             try:
                 fn()
             except Exception as exc:
-                traceback.print_exc()
+                log.exception("error en la ventana")
                 self.status.configure(text=f"Error: {exc}", text_color=RED)
+
+    def report_callback_exception(self, kind, value, trace):
+        """Errores en botones y temporizadores de Tk: al registro y a la línea de estado."""
+        log.error("error en la interfaz", exc_info=(kind, value, trace))
+        try:
+            self.status.configure(text=f"Error: {value}", text_color=RED)
+        except Exception:
+            pass
 
     def run_in_background(self, work, done):
         def target():
@@ -182,6 +203,8 @@ class App(ctk.CTk):
                 result, error = work(), None
             except Exception as exc:  # se le pasa a done para que lo enseñe
                 result, error = None, exc
+                log.warning("tarea de fondo: %s", exc,
+                            exc_info=not isinstance(exc, accounts.StepError))
             self.post(lambda: done(result, error))
         threading.Thread(target=target, daemon=True).start()
 
@@ -212,7 +235,7 @@ class App(ctk.CTk):
             return
         self.busy = True
         self.status.configure(text="Actualizando…")
-        self.run_in_background(accounts.list_accounts, self.show_usage)
+        self.run_in_background(read_accounts, self.show_usage)
 
     def refresh_usage(self):
         self.refresh(schedule=False)
@@ -235,18 +258,49 @@ class App(ctk.CTk):
         self.settings_page.show_accounts(account_list)
         self.usage_page.show(account_list)
         self.update_tray()
+        # la línea de estado antes que los cambios automáticos, que pueden escribir en ella;
+        # y no encima de lo que va contando un inicio de sesión o un cambio del escritorio
+        if not self.account_task:
+            self.show_fetched(account_list)
         if self.tray and state.setting("notify"):
             for message in usage.alerts(before, account_list):
+                log.info("aviso: %s", message)
                 self.tray.notify(message)
-        if state.setting("auto_switch") and len(account_list) > 1:
-            self.auto_switch()
+        if relay_mcp.installed():
+            self.update_relay_status(before, account_list)
+        if len(account_list) > 1:
+            if state.setting("auto_switch"):
+                self.auto_switch()
+            if state.setting("desktop_auto"):
+                self.desktop_auto_switch(account_list)
+
+    def show_fetched(self, account_list):
         if not account_list:
             self.status.configure(text="Aún no hay cuentas: guárdalas en la pestaña Ajustes.",
                                   text_color=MUTED)
             return
         # la hora en que cswap pidió el consumo de la cuenta en uso, no la de esta lectura
-        self.status.configure(text=f"Actualizado {usage.fetched_at(account_list):%H:%M}",
-                              text_color=MUTED)
+        line = f"Actualizado {usage.fetched_at(account_list):%H:%M}"
+        if accounts.schema_too_new():
+            line += (" · claude-swap es más nuevo que esta app: si algo se ve raro, "
+                     "actualiza Claude Usage")
+        self.status.configure(text=line, text_color=MUTED)
+
+    def update_relay_status(self, before, account_list):
+        """Apunta por cuánto va la cuenta de la app de escritorio: el relevo se guarda solo a
+        partir del 90 %. Al cruzarlo, un aviso para saber que ya se está guardando."""
+        current = next((acc for acc in account_list if acc.get("desktop")), None)
+        known = [usage.used(current, key) for key, _t in usage.LIMITS] if current else []
+        known = [value for value in known if value is not None]
+        try:
+            relay_mcp.write_status(max(known) if known else None)
+        except OSError:
+            pass
+        near = usage.desktop_near_limit(before, account_list, relay_mcp.NEAR)
+        if near and self.tray and state.setting("notify"):
+            self.tray.notify(f"{usage.display_name(near)} va por el {relay_mcp.NEAR} %: desde "
+                             "ahora Claude guarda solo el relevo. Si no lo hace, escribe "
+                             "«relevo» en el chat")
 
     def update_tray(self):
         if self.tray:
@@ -255,7 +309,7 @@ class App(ctk.CTk):
     def auto_switch(self):
         """Ajustes > General: si la cuenta en uso llega al umbral, cswap cambia a la de más
         margen. Una pasada tras cada lectura; así no queda nada de cswap en marcha al salir."""
-        if self.busy:
+        if self.busy or self.account_task:
             return
         self.busy = True
 
@@ -272,14 +326,19 @@ class App(ctk.CTk):
         threshold = state.setting("auto_threshold")
         self.run_in_background(lambda: accounts.auto_switch(threshold), done)
 
-    def switch_to(self, number):
+    def switch_to(self, number, retries=SWITCH_RETRIES):
         if number is None:
             return
-        if self.busy:  # se está refrescando: se cambia de cuenta en cuanto acabe
-            self.after(500, lambda: self.switch_to(number))
+        if self.busy:  # se está leyendo el consumo: se cambia de cuenta en cuanto acabe
+            if retries:
+                self.after(SWITCH_RETRY_MS, lambda: self.switch_to(number, retries - 1))
+            else:
+                self.status.configure(text="No se pudo cambiar de cuenta: claude-swap no "
+                                           "responde. Vuelve a intentarlo.", text_color=RED)
             return
         self.busy = True
         self.status.configure(text=f"Cambiando a la cuenta {number}…", text_color=MUTED)
+        log.info("Claude Code: cambio a la cuenta %s", number)
 
         def done(_result, error):
             self.busy = False
@@ -289,6 +348,72 @@ class App(ctk.CTk):
                 self.refresh_usage()
 
         self.run_in_background(lambda: accounts.switch_account(number), done)
+
+    def background_step(self, title, work, done_text):
+        """Algo largo con cuentas (iniciar sesión, cambiar la app de escritorio): lo que va
+        pasando sale arriba, en la línea de estado."""
+        if self.account_task:
+            self.status.configure(text=f"Espera: {self.account_task}", text_color=MUTED)
+            return
+        self.account_task = title
+        self.status.configure(text=title, text_color=MUTED)
+        log.info(title)
+
+        def progress(line):
+            if line.strip() and not line.startswith((">", "  ")):  # sin la salida de comandos
+                self.post(lambda: self.status.configure(text=line.strip(), text_color=MUTED))
+
+        def done(result, error):
+            self.account_task = None
+            if error:
+                self.status.configure(text=f"Error: {error}", text_color=RED)
+                return
+            message = done_text(result)
+            if message and self.tray and state.setting("notify"):
+                self.tray.notify(message)
+            self.refresh_usage()
+
+        self.run_in_background(lambda: work(progress), done)
+
+    def relogin(self, acc):
+        email = acc.get("email")
+        if email:
+            self.background_step(f"Iniciando sesión con {email}…",
+                                 lambda log: accounts.relogin(email, log),
+                                 lambda _r: None)
+
+    def use_on_desktop(self, acc, automatic=False):
+        org, name = acc.get("organizationUuid"), usage.display_name(acc)
+        if not org:
+            return
+
+        def done_text(saved):
+            if not saved:
+                return f"Inicia sesión con {name} en la app de escritorio"
+            if not automatic:
+                return None
+            message = f"La app de escritorio ha pasado a {name}: la anterior estaba agotada."
+            if relay_mcp.read_relay():
+                message += " Escribe «continúa» en un chat nuevo para seguir."
+            return message
+        self.background_step(f"Pasando la app de escritorio a {name}…",
+                             lambda log: desktop.switch_desktop(org, log), done_text)
+
+    def desktop_auto_switch(self, account_list):
+        """Ajustes > General: si la cuenta de la app de escritorio se agota, la pasa a la de
+        más margen que ya tenga su sesión guardada. Se cierra y se vuelve a abrir sola: la
+        conversación sigue en la otra cuenta, así que se empieza una nueva."""
+        last = state.load_state().get("desktop_switch") or {}
+        if self.account_task or time.time() - last.get("at", 0) < DESKTOP_AUTO_PAUSE:
+            return
+        target, warning = usage.desktop_target(account_list, desktop.has_profile)
+        if target:
+            self.use_on_desktop(target, automatic=True)
+        elif warning and warning != getattr(self, "desktop_warned", None):
+            self.desktop_warned = warning  # una vez, no cada minuto
+            self.status.configure(text=warning, text_color=RED)
+            if self.tray:
+                self.tray.notify(warning)
 
     def tick(self):
         self.usage_page.tick()
@@ -362,3 +487,25 @@ class App(ctk.CTk):
             self.listener.close()
         updater.restart(exe)
         self.quit_app()
+
+
+def refresh_relay_entry():
+    """Si el relevo está activado y la app ha cambiado de sitio (versión portable movida),
+    la app de escritorio tiene que arrancar el servidor desde el sitio nuevo."""
+    try:
+        config = json.loads(relay_mcp.config_path().read_text(encoding="utf-8"))
+        entry = (config.get("mcpServers") or {}).get(relay_mcp.NAME)
+        if entry and entry != relay_mcp.server_entry():
+            relay_mcp.set_installed(True)
+    except (OSError, ValueError):
+        pass
+
+
+def read_accounts():
+    """Las cuentas de cswap con lo que sabe la app de escritorio (qué cuenta usa y su
+    consumo, que se ve aunque cswap no pueda leerlo)."""
+    account_list = accounts.list_accounts()
+    if desktop.installed():
+        latest = desktop.latest_samples(desktop.usage_samples())
+        usage.add_desktop(account_list, latest, desktop.current_org())
+    return account_list

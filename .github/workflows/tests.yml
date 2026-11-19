@@ -1,0 +1,24 @@
+name: Pruebas
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pruebas:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Revisar el código
+        run: |
+          pip install ruff==0.8.4
+          ruff check --select E,F,W,B,PLE --ignore E501,B905 *.py claude_usage.pyw
+      - name: Pruebas
+        run: python tests.py
