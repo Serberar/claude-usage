@@ -21,6 +21,7 @@ import state
 import updater
 import usage
 import windows
+from login_dialog import LoginDialog
 from plugins_page import PluginsPage
 from settings_page import SettingsPage
 from system import find
@@ -381,11 +382,25 @@ class App(ctk.CTk):
 
         self.run_in_background(lambda: work(progress), done)
 
+    def ask_login_code(self, url, finished, who):
+        """Desde un hilo de fondo: enseña la ventana para iniciar sesión pegando el código y
+        espera a que se conteste (ver login_dialog)."""
+        answer, ready = {}, threading.Event()
+
+        def done(result):
+            answer["code"] = result
+            ready.set()
+        self.post(lambda: LoginDialog(self, url, who, finished, done))
+        ready.wait()
+        return answer.get("code")
+
     def relogin(self, acc):
         email = acc.get("email")
         if email:
             self.background_step(f"Iniciando sesión con {email}…",
-                                 lambda log: accounts.relogin(email, log),
+                                 lambda log: accounts.relogin(
+                                     email, log, lambda url, done: self.ask_login_code(
+                                         url, done, email)),
                                  lambda _r: None)
 
     def use_on_desktop(self, acc, automatic=False):

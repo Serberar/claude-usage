@@ -61,6 +61,7 @@ El consumo lo pide claude-swap a Claude cada 3-10 minutos por cuenta (más a men
 | `claude_usage.pyw` | Punto de entrada: una sola copia abierta; `--relevo` y `--desinstalar` |
 | `applog.py` | El registro de errores |
 | `app.py` | La ventana: pestañas, refresco del consumo, tareas de fondo, actualizarse |
+| `login_dialog.py` | Iniciar sesión pegando el código (enlace para abrir en ventana privada) |
 | `usage_page.py`, `plugins_page.py`, `settings_page.py` | Las tres pestañas |
 | `widgets.py`, `theme.py` | Piezas de la interfaz y colores |
 | `tray.py` | El icono junto al reloj |

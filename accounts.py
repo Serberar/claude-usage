@@ -1,7 +1,9 @@
 """Las cuentas de Claude Code: las guarda y las cambia claude-swap (cswap)."""
 
 import json
+import re
 import subprocess
+import threading
 
 from prerequisites import ensure
 from system import NO_WINDOW, StepError, find, quiet, run
@@ -76,20 +78,61 @@ def claude_login_status():
         return {"loggedIn": False}
 
 
-LOGIN_WAIT = 600  # segundos para terminar el inicio de sesión en el navegador
+LOGIN_WAIT = 600     # segundos para terminar el inicio de sesión
+LOGIN_URL_WAIT = 30  # segundos para que Claude Code dé el enlace
+LOGIN_URL = re.compile(r"https://\S+/oauth/authorize\?\S+")
 
 
-def wait_login(args, wait=LOGIN_WAIT):
-    """Abre el inicio de sesión de Claude (solo la página en el navegador, sin terminal) y
-    espera a que acabe, como mucho wait segundos: si se deja a medias, la app no se queda
-    esperando para siempre."""
-    proc = subprocess.Popen(args, creationflags=NO_WINDOW, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def wait_login(args, ask_code, wait=LOGIN_WAIT):
+    """Inicia sesión en Claude Code sin terminal, pegando el código a mano.
+
+    Claude Code da un enlace para autorizar; ask_code(enlace, terminado) lo enseña (para
+    abrirlo en una ventana privada, donde no se cuela la cuenta que el navegador tenga
+    abierta en claude.ai) y devuelve el código que da la página al acabar, "" si terminó
+    solo (se autorizó en la pestaña que abre Claude Code) o None si se cancela."""
+    proc = subprocess.Popen(args, creationflags=NO_WINDOW, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace")
+    lines, found = [], threading.Event()
+
+    def read():
+        for line in proc.stdout:
+            lines.append(line.strip())
+            if LOGIN_URL.search(line):
+                found.set()
+        found.set()  # se acabó sin dar enlace
+
+    threading.Thread(target=read, daemon=True).start()
     try:
-        proc.wait(timeout=wait)
+        url = None
+        if found.wait(LOGIN_URL_WAIT):
+            url = next((m.group() for line in lines if (m := LOGIN_URL.search(line))), None)
+        if not url:
+            raise StepError(_last(lines) or "Claude Code no ha dado el enlace para iniciar sesión")
+        code = ask_code(url, lambda: proc.poll() is not None)
+        if code is None:
+            raise StepError("cancelado")
+        if code and proc.poll() is None:
+            proc.stdin.write(code.strip() + "\n")
+            proc.stdin.flush()
+        proc.wait(timeout=60 if code else wait)
     except subprocess.TimeoutExpired:
-        proc.kill()
         raise StepError("no se terminó de iniciar sesión a tiempo; vuelve a intentarlo") from None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    if proc.returncode != 0:
+        detail = _last(lines)
+        if "400" in detail:
+            detail = "el código no vale (¿copiado entero y del último intento?)"
+        raise StepError(detail or "no se pudo iniciar sesión")
+
+
+def _last(lines):
+    """La última línea con algo que decir de lo que escribió Claude Code."""
+    useful = [line.split(">")[-1].strip() for line in lines if line.strip()]
+    useful = [line for line in useful if line and not LOGIN_URL.search(line)]
+    return useful[-1] if useful else ""
 
 
 def wrong_browser_account(got, wanted):
@@ -97,9 +140,8 @@ def wrong_browser_account(got, wanted):
     inicio de sesión lleve otro email puesto: hay que cambiarla allí antes."""
     if not got:
         return "no se terminó de iniciar sesión; vuelve a intentarlo"
-    return (f"tu navegador tiene abierta claude.ai con {got} y ha autorizado esa. En "
-            f"claude.ai cierra sesión (o cambia a {wanted}) y vuelve a pulsar el botón; "
-            f"en la página de autorizar comprueba que sale {wanted}")
+    return (f"se ha autorizado {got}, no {wanted}: vuelve a intentarlo abriendo el enlace "
+            f"en una ventana privada y entrando con {wanted}")
 
 
 def save_current_account(log):
@@ -107,8 +149,8 @@ def save_current_account(log):
     cswap("add", log=log, timeout=120)
 
 
-def add_another_account(log):
-    """Guarda la cuenta actual, abre el inicio de sesión de Claude y guarda la nueva."""
+def add_another_account(log, ask_code):
+    """Guarda la cuenta actual, inicia sesión con otra (ver wait_login) y la guarda."""
     ensure("claude", log)
     ensure("cswap", log)
     before = (claude_login_status() or {}).get("email")
@@ -118,8 +160,8 @@ def add_another_account(log):
             cswap("add", log=log, timeout=120)
         except StepError:
             pass  # ya estaba guardada
-    log("Se abre el navegador: entra con la otra cuenta y pulsa Autorizar.")
-    wait_login([find("claude"), "auth", "login"])
+    log("Sigue los pasos de la ventana que se ha abierto.")
+    wait_login([find("claude"), "auth", "login"], ask_code)
     after = (claude_login_status() or {}).get("email")
     if not after:
         raise StepError("no se inició sesión")
@@ -130,17 +172,15 @@ def add_another_account(log):
     log(f"✔ {after} añadida")
 
 
-def relogin(email, log, wait=LOGIN_WAIT):
-    """Vuelve a iniciar la sesión de Claude Code de una cuenta guardada cuya sesión caducó.
-
-    Abre el inicio de sesión de Claude con su email ya puesto (en el navegador basta con
-    pulsar Autorizar si ya estás dentro de claude.ai con esa cuenta), guarda la sesión
-    nueva en cswap y deja Claude Code con la cuenta que tenía antes."""
+def relogin(email, log, ask_code, wait=LOGIN_WAIT):
+    """Vuelve a iniciar la sesión de Claude Code de una cuenta guardada cuya sesión caducó
+    (ver wait_login), guarda la sesión nueva en cswap y deja Claude Code con la cuenta que
+    tenía antes."""
     ensure("claude", log)
     ensure("cswap", log)
     previous = next((acc for acc in list_accounts() if acc.get("active")), None)
-    log(f"Se abre el navegador: comprueba que sale {email} y pulsa Autorizar.")
-    wait_login([find("claude"), "auth", "login", "--email", email], wait)
+    log("Sigue los pasos de la ventana que se ha abierto.")
+    wait_login([find("claude"), "auth", "login", "--email", email], ask_code, wait)
     got = (claude_login_status() or {}).get("email")
     try:
         if got != email:
