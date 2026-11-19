@@ -1,39 +1,150 @@
-"""La pestaña Uso: una tarjeta por cuenta con sus dos límites."""
+"""La pestaña Uso: arriba, cómo se usan las cuentas (automático o qué cuenta va en Claude
+Code y en la app de escritorio); debajo, una tarjeta por cuenta con sus dos límites."""
 
 import customtkinter as ctk
 
+import state
 import usage
-from theme import ACCENT, AMBER, BORDER, GREEN, MUTED
-from widgets import Meter, Page, button, card, flat_button, notice, pill, text
+from theme import ACCENT, AMBER, BORDER, CARD, GREEN, MUTED, TEXT, TRACK, font
+from widgets import Meter, Page, button, card, notice, pill, segmented, text
+
+MODE_LABELS = {"auto": "Automático", "manual": "Manual"}
+DARK_TEXT = ("#ffffff", "#0e1015")  # sobre el verde claro del tema oscuro
+
+
+def dropdown(master, command):
+    return ctk.CTkOptionMenu(
+        master, values=["—"], command=command, width=170, height=30, corner_radius=8,
+        font=font(12), dropdown_font=font(12), fg_color=TRACK, button_color=TRACK,
+        button_hover_color=BORDER, text_color=TEXT, dropdown_fg_color=CARD,
+        dropdown_hover_color=TRACK, dropdown_text_color=TEXT, dynamic_resizing=False)
+
+
+class UseCard:
+    """Cómo se usan las cuentas. Automático: Code y escritorio con la misma cuenta, pasan
+    juntos a otra al agotarse. Manual: un desplegable para cada uno, sin cambios solos."""
+
+    def __init__(self, master, actions):
+        self.actions = actions
+        self.accounts = []
+        self.frame, inner = card(master)
+        self.frame.pack(fill="x", pady=(0, 12))
+        head = ctk.CTkFrame(inner, fg_color="transparent")
+        head.pack(fill="x")
+        text(head, "Cómo se usan", 15, bold=True).pack(side="left")
+        self.mode = segmented(head, list(MODE_LABELS.values()), command=self.change_mode,
+                              height=28)
+        self.mode.pack(side="right")
+
+        self.auto = ctk.CTkFrame(inner, fg_color="transparent")
+        text(self.auto, "Claude Code y la app de escritorio van con la misma cuenta y, "
+                        "cuando se agota, pasan solos a la otra.", 12, MUTED,
+             wrap=True).pack(fill="x")
+        self.now = text(self.auto, "", 12, wrap=True)
+        self.now.pack(fill="x", pady=(6, 0))
+
+        self.manual = ctk.CTkFrame(inner, fg_color="transparent")
+        self.code_row, self.code_menu = self.row("Claude Code", self.pick_code)
+        self.desk_row, self.desk_menu = self.row("Escritorio", self.pick_desktop)
+        self.note = text(self.manual, "Nada cambia solo. Puedes poner la misma en los dos.",
+                         11, MUTED, wrap=True)
+        self.note.pack(fill="x", pady=(8, 0))
+
+    def row(self, label, command):
+        line = ctk.CTkFrame(self.manual, fg_color="transparent")
+        line.pack(fill="x", pady=(8, 0))
+        text(line, label, 13).pack(side="left")
+        menu = dropdown(line, command)
+        menu.pack(side="right")
+        return line, menu
+
+    # ── datos ──
+
+    def labels(self, for_code=True):
+        """El nombre de cada cuenta en un desplegable, diciendo si no se puede usar ahí (la
+        sesión caducada es la de Claude Code: en el escritorio sí se puede usar)."""
+        names = {}
+        for acc in self.accounts:
+            name = usage.display_name(acc)
+            if name in names.values():
+                name = f"{name} ({acc.get('number')})"
+            if for_code and usage.needs_login(acc):
+                name += " · sin sesión"
+            elif usage.exhausted(acc, "sevenDay"):
+                name += " · agotada"
+            names[acc.get("number")] = name
+        return names
+
+    def update(self, accounts):
+        self.accounts = accounts
+        mode = state.mode()
+        self.mode.set(MODE_LABELS[mode])
+        names, desk_names = self.labels(), self.labels(for_code=False)
+        code = next((acc for acc in accounts if acc.get("active")), None)
+        desk = next((acc for acc in accounts if acc.get("desktop")), None)
+        has_desktop = self.actions["desktop_installed"]()
+        self.code_menu.configure(values=list(names.values()) or ["—"])
+        self.desk_menu.configure(values=list(desk_names.values()) or ["—"])
+        self.code_menu.set(names.get(code.get("number")) if code else "—")
+        self.desk_menu.set(desk_names.get(desk.get("number")) if desk else "—")
+
+        parts = [f"Code: {usage.display_name(code) if code else '—'}"]
+        if has_desktop:
+            parts.append(f"Escritorio: {usage.display_name(desk) if desk else '—'}")
+        self.now.configure(text="Ahora  ·  " + "  ·  ".join(parts))
+
+        self.auto.pack_forget()
+        self.manual.pack_forget()
+        (self.auto if mode == "auto" else self.manual).pack(fill="x", pady=(10, 0))
+        if has_desktop:
+            self.desk_row.pack(fill="x", pady=(8, 0), before=self.note)
+        else:
+            self.desk_row.pack_forget()
+
+    # ── elegir ──
+
+    def account_named(self, label, for_code=True):
+        names = self.labels(for_code)
+        number = next((n for n, name in names.items() if name == label), None)
+        return next((acc for acc in self.accounts if acc.get("number") == number), None)
+
+    def change_mode(self, label):
+        mode = next(key for key, shown in MODE_LABELS.items() if shown == label)
+        state.set_setting("mode", mode)
+        self.actions["mode_changed"]()
+
+    def pick_code(self, label):
+        acc = self.account_named(label)
+        if acc and not acc.get("active"):
+            self.actions["switch"](acc.get("number"))
+
+    def pick_desktop(self, label):
+        acc = self.account_named(label, for_code=False)
+        if acc and not acc.get("desktop"):
+            self.actions["desktop"](acc)
 
 
 class AccountCard:
-    """Una cuenta: nombre, si está en uso (o botón para usarla) y sus límites.
+    """Una cuenta: nombre, dónde se está usando (CODE, ESCRITORIO) y sus límites.
     Lo que se enseña lo decide usage.account_view; aquí solo se dibuja."""
 
     def __init__(self, master, actions):
-        """actions: switch(number), desktop(acc), login(acc) y desktop_installed()."""
-        self.actions = actions
-        on_switch = actions["switch"]
+        """actions: login(acc)."""
         self.frame, inner = card(master)
         self.frame.pack(fill="x", pady=(0, 12))
         self.acc = None
         head = ctk.CTkFrame(inner, fg_color="transparent")
         head.pack(fill="x", pady=(0, 12))
-        self.names = ctk.CTkFrame(head, fg_color="transparent")
-        self.names.pack(side="left", fill="x", expand=True)
-        # salta de línea si no cabe junto a EN USO o Usar (ventana de 360 px)
-        self.name = text(self.names, "", 16, bold=True, wrap=True)
+        # las etiquetas antes que el nombre: si no cabe, salta de línea el nombre
+        self.tags = ctk.CTkFrame(head, fg_color="transparent")
+        self.tags.pack(side="right", anchor="n")
+        self.code_tag = pill(self.tags, "CODE", ACCENT)
+        self.desk_tag = pill(self.tags, "ESCRITORIO", GREEN, color=DARK_TEXT)
+        names = ctk.CTkFrame(head, fg_color="transparent")
+        names.pack(side="left", fill="x", expand=True)
+        self.name = text(names, "", 16, bold=True, wrap=True)
         self.name.pack(fill="x")
-        self.email = text(self.names, "", 11, MUTED)
-        self.badge = pill(head, "EN USO", ACCENT)
-        self.switch = button(head, "Usar", lambda: on_switch(self.acc.get("number")))
-        # la app de escritorio lleva su propia cuenta, aparte de Claude Code
-        self.desk = ctk.CTkFrame(inner, fg_color="transparent")
-        text(self.desk, "App de escritorio", 11, MUTED).pack(side="left")
-        self.desk_badge = pill(self.desk, "EN USO", GREEN, color=("#ffffff", "#0e1015"))
-        self.desk_use = flat_button(self.desk, "Usar ahí", lambda: actions["desktop"](self.acc),
-                                    color=ACCENT, size=11)
+        self.email = text(names, "", 11, MUTED)
         self.meters = {}
         for key, title in usage.LIMITS:
             self.meters[key] = Meter(inner, title)
@@ -51,27 +162,19 @@ class AccountCard:
             self.email.pack(fill="x")
         else:
             self.email.pack_forget()
-        # before=names: las etiquetas se colocan antes que el nombre, que se ajusta al hueco
-        self.badge.pack_forget()
-        self.switch.pack_forget()
+        self.code_tag.pack_forget()
+        self.desk_tag.pack_forget()
         if view["active"]:
-            self.badge.pack(side="right", before=self.names)
-        elif view["can_switch"]:
-            self.switch.pack(side="right", before=self.names)
-        self.frame.configure(border_color=ACCENT if view["active"] else BORDER,
-                             border_width=2 if view["active"] else 1)
+            self.code_tag.pack(side="left", padx=(6, 0))
+        if view["desktop"]:
+            self.desk_tag.pack(side="left", padx=(6, 0))
+        in_use = view["active"] or view["desktop"]
+        self.frame.configure(border_color=ACCENT if in_use else BORDER,
+                             border_width=2 if in_use else 1)
 
         # se quitan y se vuelven a poner en orden: así un límite oculto vuelve a su sitio
-        for widget in (self.desk, *self.meters.values(), self.warning, self.login):
+        for widget in (*self.meters.values(), self.warning, self.login):
             widget.pack_forget()
-        if self.actions["desktop_installed"]():
-            self.desk.pack(fill="x", pady=(0, 10))
-            self.desk_badge.pack_forget()
-            self.desk_use.pack_forget()
-            if view["desktop"]:
-                self.desk_badge.pack(side="right")
-            elif view["can_use_on_desktop"]:
-                self.desk_use.pack(side="right")
         for key, meter in self.meters.items():
             shown = view["meters"][key]
             if not shown["visible"]:
@@ -103,15 +206,20 @@ class AccountCard:
 
 
 class UsagePage(Page):
+    """actions: switch(number), desktop(acc), login(acc), desktop_installed() y
+    mode_changed()."""
+
     def __init__(self, master, actions):
         super().__init__(master)
         self.actions = actions
-        on_switch = actions["switch"]
         self.cards = []
         self.best = None
-        # arriba, solo si otra cuenta tiene claramente más margen que la que está en uso
+        self.use = UseCard(self.body, actions)
+        self.use.frame.pack_forget()  # hasta que haya más de una cuenta
+        # en manual, si otra cuenta tiene claramente más margen que la de Claude Code
         self.best_note, self.best_text, _button = notice(
-            self.body, "", "Usar", lambda: self.best and on_switch(self.best.get("number")))
+            self.body, "", "Usar en Code",
+            lambda: self.best and actions["switch"](self.best.get("number")))
 
     def show(self, accounts):
         while len(self.cards) < len(accounts):
@@ -120,13 +228,18 @@ class UsagePage(Page):
             self.cards.pop().destroy()
         for account_card, acc in zip(self.cards, accounts):
             account_card.update(acc)
-        self.best = usage.best_account(accounts)
+        first = self.cards[0].frame if self.cards else None
+        self.use.frame.pack_forget()
+        if len(accounts) > 1:
+            self.use.update(accounts)
+            self.use.frame.pack(fill="x", pady=(0, 12), before=first)
+        self.best = usage.best_account(accounts) if state.mode() == "manual" else None
         self.best_note.pack_forget()
-        if self.best and self.cards:
+        if self.best and first:
             self.best_text.configure(
                 text=f"{usage.display_name(self.best)} tiene más margen "
                      f"(le queda un {usage.headroom(self.best):.0f} %).")
-            self.best_note.pack(fill="x", pady=(0, 12), before=self.cards[0].frame)
+            self.best_note.pack(fill="x", pady=(0, 12), before=first)
 
     def tick(self):
         for account_card in self.cards:

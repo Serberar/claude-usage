@@ -41,15 +41,31 @@ def save_state(**changes):
 # opciones de Ajustes > General y su valor si nunca se han tocado
 SETTINGS = {
     "notify": True,          # avisos de Windows (cerca del límite, cuenta disponible otra vez)
-    "auto_switch": False,    # cambiar de cuenta solo al llegar al umbral (cswap auto)
-    "auto_threshold": 90,    # % del límite que va peor
-    "desktop_auto": False,   # pasar la app de escritorio a otra cuenta cuando se agota
+    "mode": None,            # "auto" o "manual" (ver mode())
+    "auto_threshold": 90,    # en automático, % del límite que va peor al que cambia Code
+    # de versiones anteriores, solo para elegir el modo la primera vez
+    "auto_switch": False,
+    "desktop_auto": False,
     "tray_shows": "five",    # qué marca el icono: "five", "week" o "worst"
 }
 
 
 def setting(name):
     return load_state().get("settings", {}).get(name, SETTINGS[name])
+
+
+MODES = ("auto", "manual")
+
+
+def mode():
+    """Cómo se usan las cuentas (pestaña Uso). "auto": Claude Code y la app de escritorio
+    van con la misma cuenta y pasan juntos a otra cuando se agota. "manual": cada uno con
+    la que se elija, sin cambios solos. Sin elegir aún, lo que dijeran los interruptores de
+    cambio automático de versiones anteriores."""
+    value = load_state().get("settings", {}).get("mode")
+    if value in MODES:
+        return value
+    return "auto" if setting("auto_switch") or setting("desktop_auto") else "manual"
 
 
 def set_setting(name, value):

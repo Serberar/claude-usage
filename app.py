@@ -124,7 +124,8 @@ class App(ctk.CTk):
         pages.pack(fill="both", expand=True)
         self.usage_page = UsagePage(pages, {
             "switch": self.switch_to, "desktop": self.use_on_desktop,
-            "login": self.relogin, "desktop_installed": desktop.installed})
+            "login": self.relogin, "desktop_installed": desktop.installed,
+            "mode_changed": self.mode_changed})
         self.settings_page = SettingsPage(pages, self)
         self.plugins_page = PluginsPage(pages, self, on_status=self.settings_page.show_plugins)
         self.tab_pages = {"Uso": self.usage_page, "Plugins": self.plugins_page,
@@ -271,10 +272,9 @@ class App(ctk.CTk):
                 self.tray.notify(message)
         if relay_mcp.installed():
             self.update_relay_status(before, account_list)
-        if len(account_list) > 1:
-            if state.setting("auto_switch"):
-                self.auto_switch()
-            if state.setting("desktop_auto"):
+        if len(account_list) > 1 and state.mode() == "auto":
+            self.auto_switch()
+            if desktop.installed():
                 self.desktop_auto_switch(account_list)
 
     def show_fetched(self, account_list):
@@ -305,12 +305,18 @@ class App(ctk.CTk):
                              "ahora Claude guarda solo el relevo. Si no lo hace, escribe "
                              "«relevo» en el chat")
 
+    def mode_changed(self):
+        """Pestaña Uso: se ha pasado a automático o a manual."""
+        log.info("modo: %s", state.mode())
+        self.usage_page.show(self.accounts)
+        self.refresh_usage()  # en automático, que mire ya si toca cambiar
+
     def update_tray(self):
         if self.tray:
             self.tray.update(self.accounts, state.setting("tray_shows"))
 
     def auto_switch(self):
-        """Ajustes > General: si la cuenta en uso llega al umbral, cswap cambia a la de más
+        """Modo automático: si la cuenta de Code llega al umbral, cswap cambia a la de más
         margen. Una pasada tras cada lectura; así no queda nada de cswap en marcha al salir."""
         if self.busy or self.account_task:
             return
@@ -421,7 +427,7 @@ class App(ctk.CTk):
                              lambda log: desktop.switch_desktop(org, log), done_text)
 
     def desktop_auto_switch(self, account_list):
-        """Ajustes > General: si la cuenta de la app de escritorio se agota, la pasa a la de
+        """Modo automático: si la cuenta de la app de escritorio se agota, la pasa a la de
         más margen que ya tenga su sesión guardada. Se cierra y se vuelve a abrir sola: la
         conversación sigue en la otra cuenta, así que se empieza una nueva."""
         last = state.load_state().get("desktop_switch") or {}
