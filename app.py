@@ -125,6 +125,7 @@ class App(ctk.CTk):
         self.usage_page = UsagePage(pages, {
             "switch": self.switch_to, "desktop": self.use_on_desktop,
             "login": self.relogin, "desktop_installed": desktop.installed,
+            "code_installed": lambda: bool(find("claude")),
             "mode_changed": self.mode_changed})
         self.settings_page = SettingsPage(pages, self)
         self.plugins_page = PluginsPage(pages, self, on_status=self.settings_page.show_plugins)
