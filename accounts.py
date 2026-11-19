@@ -4,7 +4,7 @@ import json
 import subprocess
 
 from prerequisites import ensure
-from system import NEW_CONSOLE, StepError, find, quiet, run
+from system import NO_WINDOW, StepError, find, quiet, run
 
 
 def cswap(*args, log=quiet, answer=None, timeout=60, ok_codes=(0,)):
@@ -80,14 +80,26 @@ LOGIN_WAIT = 600  # segundos para terminar el inicio de sesión en el navegador
 
 
 def wait_login(args, wait=LOGIN_WAIT):
-    """Abre el inicio de sesión de Claude en su ventana y espera a que acabe (como mucho
-    wait segundos: si se deja a medias, la app no se queda esperando para siempre)."""
-    proc = subprocess.Popen(args, creationflags=NEW_CONSOLE)
+    """Abre el inicio de sesión de Claude (solo la página en el navegador, sin terminal) y
+    espera a que acabe, como mucho wait segundos: si se deja a medias, la app no se queda
+    esperando para siempre."""
+    proc = subprocess.Popen(args, creationflags=NO_WINDOW, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         proc.wait(timeout=wait)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise StepError("no se terminó de iniciar sesión a tiempo; vuelve a intentarlo") from None
+
+
+def wrong_browser_account(got, wanted):
+    """Claude autoriza la cuenta que el navegador tiene abierta en claude.ai, aunque el
+    inicio de sesión lleve otro email puesto: hay que cambiarla allí antes."""
+    if not got:
+        return "no se terminó de iniciar sesión; vuelve a intentarlo"
+    return (f"tu navegador tiene abierta claude.ai con {got} y ha autorizado esa. En "
+            f"claude.ai cierra sesión (o cambia a {wanted}) y vuelve a pulsar el botón; "
+            f"en la página de autorizar comprueba que sale {wanted}")
 
 
 def save_current_account(log):
@@ -106,13 +118,13 @@ def add_another_account(log):
             cswap("add", log=log, timeout=120)
         except StepError:
             pass  # ya estaba guardada
-    log("Se abre una ventana para iniciar sesión con la otra cuenta. Sigue los pasos del navegador.")
+    log("Se abre el navegador: entra con la otra cuenta y pulsa Autorizar.")
     wait_login([find("claude"), "auth", "login"])
     after = (claude_login_status() or {}).get("email")
     if not after:
         raise StepError("no se inició sesión")
     if after == before:
-        raise StepError(f"sigues con la misma cuenta ({after}); inicia sesión con otra")
+        raise StepError(wrong_browser_account(after, "la otra cuenta"))
     log(f"Guardando la cuenta nueva ({after})…")
     cswap("add", log=log, timeout=120)
     log(f"✔ {after} añadida")
@@ -127,12 +139,12 @@ def relogin(email, log, wait=LOGIN_WAIT):
     ensure("claude", log)
     ensure("cswap", log)
     previous = next((acc for acc in list_accounts() if acc.get("active")), None)
-    log(f"Se abre el navegador para iniciar sesión con {email}: pulsa Autorizar.")
+    log(f"Se abre el navegador: comprueba que sale {email} y pulsa Autorizar.")
     wait_login([find("claude"), "auth", "login", "--email", email], wait)
     got = (claude_login_status() or {}).get("email")
     try:
         if got != email:
-            raise StepError(f"se inició sesión con {got or 'ninguna cuenta'}, no con {email}")
+            raise StepError(wrong_browser_account(got, email))
         log(f"Guardando la sesión nueva de {email}…")
         cswap("add", log=log, timeout=120)  # con la cuenta ya guardada, la renueva
     finally:

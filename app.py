@@ -37,6 +37,7 @@ UPDATE_CHECK_MS = 6 * 3600_000  # cada cuánto se mira si hay versión nueva
 DESKTOP_AUTO_PAUSE = 15 * 60    # tras cambiar sola la app de escritorio, no repetir en tanto
 SWITCH_RETRY_MS = 500           # cambiar de cuenta mientras se lee el consumo: se reintenta…
 SWITCH_RETRIES = 120            # …durante un minuto como mucho
+STATUS_HOLD = 180               # segundos que se queda a la vista un error al iniciar sesión
 WIDTH = 360
 
 
@@ -54,6 +55,7 @@ class App(ctk.CTk):
         # iniciar sesión o cambiar la app de escritorio (minutos): mientras tanto el consumo
         # se sigue leyendo, pero no se cambia de cuenta solo
         self.account_task = None
+        self.status_hold_until = 0  # hasta cuándo se deja un error a la vista
         self.accounts = []         # la última lectura, para los avisos y el icono
         self.task_running = False  # instalando o cambiando algo (de uno en uno)
         self.pinned = False
@@ -260,7 +262,7 @@ class App(ctk.CTk):
         self.update_tray()
         # la línea de estado antes que los cambios automáticos, que pueden escribir en ella;
         # y no encima de lo que va contando un inicio de sesión o un cambio del escritorio
-        if not self.account_task:
+        if not self.account_task and time.time() >= self.status_hold_until:
             self.show_fetched(account_list)
         if self.tray and state.setting("notify"):
             for message in usage.alerts(before, account_list):
@@ -366,7 +368,11 @@ class App(ctk.CTk):
         def done(result, error):
             self.account_task = None
             if error:
+                # que dé tiempo a leerlo: el refresco de cada minuto no lo pisa enseguida
+                self.status_hold_until = time.time() + STATUS_HOLD
                 self.status.configure(text=f"Error: {error}", text_color=RED)
+                if self.tray:
+                    self.tray.notify(f"No se pudo: {error}")
                 return
             message = done_text(result)
             if message and self.tray and state.setting("notify"):
