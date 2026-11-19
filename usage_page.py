@@ -39,18 +39,25 @@ class UseCard:
         self.mode.pack(side="right")
 
         self.auto = ctk.CTkFrame(inner, fg_color="transparent")
-        text(self.auto, "Claude Code y la app de escritorio van con la misma cuenta y, "
-                        "cuando se agota, pasan solos a la otra.", 12, MUTED,
-             wrap=True).pack(fill="x")
+        self.explain = text(self.auto, "", 12, MUTED, wrap=True)
+        self.explain.pack(fill="x")
         self.now = text(self.auto, "", 12, wrap=True)
         self.now.pack(fill="x", pady=(6, 0))
 
         self.manual = ctk.CTkFrame(inner, fg_color="transparent")
         self.code_row, self.code_menu = self.row("Claude Code", self.pick_code)
         self.desk_row, self.desk_menu = self.row("Escritorio", self.pick_desktop)
-        self.note = text(self.manual, "Nada cambia solo. Puedes poner la misma en los dos.",
-                         11, MUTED, wrap=True)
+        self.note = text(self.manual, "", 11, MUTED, wrap=True)
         self.note.pack(fill="x", pady=(8, 0))
+
+    # lo que dice el modo automático según lo que esté instalado (Code, escritorio)
+    EXPLAIN = {
+        (True, True): "Claude Code y la app de escritorio van con la misma cuenta y, "
+                      "cuando se agota, pasan solos a la otra.",
+        (True, False): "Claude Code usa una cuenta y, cuando se agota, pasa solo a la otra.",
+        (False, True): "La app de escritorio usa una cuenta y, cuando se agota, pasa sola a "
+                       "la otra.",
+    }
 
     def row(self, label, command):
         line = ctk.CTkFrame(self.manual, fg_color="transparent")
@@ -84,24 +91,34 @@ class UseCard:
         names, desk_names = self.labels(), self.labels(for_code=False)
         code = next((acc for acc in accounts if acc.get("active")), None)
         desk = next((acc for acc in accounts if acc.get("desktop")), None)
+        # solo lo que está instalado en este ordenador
+        has_code = self.actions["code_installed"]()
         has_desktop = self.actions["desktop_installed"]()
+        if not (has_code or has_desktop):
+            has_code = True  # sin ninguno no hay cuentas que enseñar; por si acaso, Code
         self.code_menu.configure(values=list(names.values()) or ["—"])
         self.desk_menu.configure(values=list(desk_names.values()) or ["—"])
         self.code_menu.set(names.get(code.get("number")) if code else "—")
         self.desk_menu.set(desk_names.get(desk.get("number")) if desk else "—")
 
-        parts = [f"Code: {usage.display_name(code) if code else '—'}"]
+        self.explain.configure(text=self.EXPLAIN[(has_code, has_desktop)])
+        parts = []
+        if has_code:
+            parts.append(f"Code: {usage.display_name(code) if code else '—'}")
         if has_desktop:
             parts.append(f"Escritorio: {usage.display_name(desk) if desk else '—'}")
         self.now.configure(text="Ahora  ·  " + "  ·  ".join(parts))
+        both = has_code and has_desktop
+        self.note.configure(text="Nada cambia solo." + (" Puedes poner la misma en los dos."
+                                                        if both else ""))
 
         self.auto.pack_forget()
         self.manual.pack_forget()
         (self.auto if mode == "auto" else self.manual).pack(fill="x", pady=(10, 0))
-        if has_desktop:
-            self.desk_row.pack(fill="x", pady=(8, 0), before=self.note)
-        else:
-            self.desk_row.pack_forget()
+        for row, shown in ((self.code_row, has_code), (self.desk_row, has_desktop)):
+            row.pack_forget()
+            if shown:
+                row.pack(fill="x", pady=(8, 0), before=self.note)
 
     # ── elegir ──
 
@@ -224,8 +241,8 @@ class AccountCard:
 
 
 class UsagePage(Page):
-    """actions: switch(number), desktop(acc), login(acc), desktop_installed() y
-    mode_changed()."""
+    """actions: switch(number), desktop(acc), login(acc), code_installed(),
+    desktop_installed() y mode_changed()."""
 
     def __init__(self, master, actions):
         super().__init__(master)
