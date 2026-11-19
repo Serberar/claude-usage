@@ -170,16 +170,16 @@ class AccountCard:
         self.acc = None
         head = ctk.CTkFrame(inner, fg_color="transparent")
         head.pack(fill="x", pady=(0, 12))
-        # las etiquetas antes que el nombre: si no cabe, salta de línea el nombre
-        self.tags = ctk.CTkFrame(head, fg_color="transparent")
-        self.tags.pack(side="right", anchor="n")
+        # las etiquetas se colocan antes que el nombre: si no cabe, salta de línea el nombre.
+        # Solo se coloca con alguna dentro: un marco vacío ocupa 200x200 y lo descoloca todo
+        self.tags = ctk.CTkFrame(head, fg_color="transparent", width=0, height=0)
         self.code_tag = pill(self.tags, "CODE", ACCENT)
         self.desk_tag = pill(self.tags, "ESCRITORIO", GREEN, color=DARK_TEXT)
-        names = ctk.CTkFrame(head, fg_color="transparent")
-        names.pack(side="left", fill="x", expand=True)
-        self.name = text(names, "", 16, bold=True, wrap=True)
+        self.names = ctk.CTkFrame(head, fg_color="transparent")
+        self.names.pack(side="left", fill="x", expand=True)
+        self.name = text(self.names, "", 16, bold=True, wrap=True)
         self.name.pack(fill="x")
-        self.email = text(names, "", 11, MUTED)
+        self.email = text(self.names, "", 11, MUTED, wrap=True)
         self.meters = {}
         for key, title in usage.LIMITS:
             self.meters[key] = Meter(inner, title)
@@ -199,11 +199,14 @@ class AccountCard:
             self.email.pack_forget()
         self.code_tag.pack_forget()
         self.desk_tag.pack_forget()
+        self.tags.pack_forget()
         if view["active"]:
             self.code_tag.pack(side="left", padx=(6, 0))
         if view["desktop"]:
             self.desk_tag.pack(side="left", padx=(6, 0))
         in_use = view["active"] or view["desktop"]
+        if in_use:
+            self.tags.pack(side="right", anchor="n", before=self.names)
         self.frame.configure(border_color=ACCENT if in_use else BORDER,
                              border_width=2 if in_use else 1)
 
