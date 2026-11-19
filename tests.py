@@ -321,16 +321,28 @@ def test_login_expires_soon():
 
 
 def test_desktop_target():
-    def acc(org, five, desk=False):
-        return {"organizationUuid": org, "desktop": desk, "usage": {"fiveHour": {"pct": five}}}
+    def acc(org, five, desk=False, active=False):
+        return {"organizationUuid": org, "desktop": desk, "active": active,
+                "usage": {"fiveHour": {"pct": five}}}
     full, free, other = acc("a", 100, True), acc("b", 20), acc("c", 50)
     assert usage.desktop_target([full, free, other], lambda org: True) == (free, None)
     assert usage.desktop_target([full, free, other], lambda org: org == "c") == (other, None)
+    # en automático van juntas: a la de Claude Code aunque otra tenga más margen
+    code = acc("c", 50, active=True)
+    assert usage.desktop_target([full, free, code], lambda org: True) == (code, None)
     target, warning = usage.desktop_target([full, free], lambda org: False)  # sin sesión
-    assert target is None and "Usar ahí" in warning
+    assert target is None and "Manual" in warning
     assert usage.desktop_target([acc("a", 50, True), free], lambda org: True) == (None, None)
     assert usage.desktop_target([full, acc("b", 100)], lambda org: True) == (None, None)
 
+
+def test_mode(tmp):
+    state.STATE_FILE = tmp / "state.json"
+    assert state.mode() == "manual"
+    state.set_setting("auto_switch", True)  # de una versión anterior
+    assert state.mode() == "auto"
+    state.set_setting("mode", "manual")     # lo elegido manda
+    assert state.mode() == "manual"
 
 def test_desktop_profiles(tmp):
     data, profiles = tmp / "Claude", tmp / "perfiles"

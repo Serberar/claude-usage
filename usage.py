@@ -275,6 +275,9 @@ def desktop_target(accounts, has_profile):
     más margen que ya tenga sesión guardada para la app (si no, saldría la pantalla de
     inicio de sesión en vez de poder seguir).
 
+    Va a la misma cuenta que Claude Code si puede (en automático van juntas); si no, a la
+    de más margen.
+
     Devuelve (cuenta, None) si toca cambiar; (None, aviso) si toca pero a las cuentas con
     margen les falta la sesión guardada; y (None, None) si no toca."""
     current = next((acc for acc in accounts if acc.get("desktop")), None)
@@ -283,13 +286,14 @@ def desktop_target(accounts, has_profile):
     free = [acc for acc in accounts if acc is not current and not blocked(acc)
             and (headroom(acc) or 0) > 0]
     ready = [acc for acc in free if has_profile(acc.get("organizationUuid"))]
-    if ready:
-        return max(ready, key=headroom), None
+    code = next((acc for acc in ready if acc.get("active")), None)
+    if code or ready:
+        return code or max(ready, key=headroom), None
     if free:
         best = max(free, key=headroom)
         return None, (f"La app de escritorio se ha agotado y {display_name(best)} tiene "
-                      "margen, pero aún no la has usado ahí: pulsa «Usar ahí» en su tarjeta "
-                      "(solo hace falta la primera vez)")
+                      "margen, pero aún no la has usado ahí. Pasa a Manual, elígela en "
+                      "«Escritorio» e inicia sesión (solo la primera vez)")
     return None, None
 
 

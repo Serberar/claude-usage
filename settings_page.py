@@ -104,9 +104,9 @@ class SettingsPage(Page):
                      "Los avisos de Windows saltan cuando la cuenta en uso pasa del 90 % del "
                      "límite de 5 horas, cuando una cuenta agotada vuelve a estar disponible "
                      "y cuando la sesión de una cuenta caduca o está a punto.",
-                     "El cambio automático usa claude-swap: cambia a la cuenta con más margen "
-                     "cuando la que usas llega al límite elegido. La app de escritorio cambia "
-                     "al agotarse la suya, a una cuenta que ya hayas usado ahí."):
+                     "En automático (pestaña Uso), Claude Code cambia a la cuenta con más "
+                     "margen al llegar al límite elegido, y la app de escritorio, al "
+                     "agotarse la suya, se va a la de Code. En manual eliges tú cada una."):
             text(info, line, 12, MUTED, wrap=True).pack(fill="x", pady=(8, 0))
         link(info, "Abrir el registro de errores", self.open_log)
 
@@ -393,17 +393,9 @@ class GeneralSection:
                     after=self.page.app.update_tray)
         self.setting_switch(box, "Avisos de Windows", "notify")
 
-        auto = self.setting_switch(box, "Cambiar de cuenta sola al llegar al límite",
-                                   "auto_switch", after=lambda: show_threshold())
-        threshold = self.choice(box, "Al llegar al", {n: f"{n} %" for n in self.THRESHOLDS},
-                                "auto_threshold")
-
-        def show_threshold():
-            if auto.get():
-                threshold.pack(fill="x", pady=(8, 0))
-            else:
-                threshold.pack_forget()
-        show_threshold()
+        # automático o manual se elige arriba en la pestaña Uso; aquí, cuándo cambia Code
+        self.choice(box, "En automático, Code cambia al",
+                    {n: f"{n} %" for n in self.THRESHOLDS}, "auto_threshold")
         if desktop.installed():
             relay = tk.BooleanVar(value=relay_mcp.installed())
             switch(box, "Relevo de conversaciones (escritorio)", relay,
@@ -413,12 +405,6 @@ class GeneralSection:
                       "Tras el cambio de cuenta, escribe «continúa» en un "
                       "chat nuevo y sigue donde lo dejó. Se activa al volver a abrir la app de "
                       "escritorio; la primera vez, pulsa «Permitir siempre» cuando lo pida.",
-                 11, MUTED, wrap=True).pack(fill="x", pady=(4, 0))
-            self.setting_switch(box, "Cambiar la app de escritorio al agotarse",
-                                "desktop_auto")
-            text(box, "Se cierra y se vuelve a abrir con la cuenta que tenga más margen; la "
-                      "conversación se queda en la cuenta anterior. Solo pasa a cuentas que "
-                      "ya hayas usado en la app de escritorio desde aquí (botón «Usar ahí»).",
                  11, MUTED, wrap=True).pack(fill="x", pady=(4, 0))
 
     def setting_switch(self, box, label, name, after=None):
