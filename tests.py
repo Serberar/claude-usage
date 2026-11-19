@@ -465,6 +465,13 @@ def test_cannot_switch_to_dead_login():
     assert usage.account_view(ok)["can_switch"]
 
 
+
+def test_wrong_browser_account():
+    import accounts
+    text = accounts.wrong_browser_account("b@x.com", "a@x.com")
+    assert "b@x.com" in text and "a@x.com" in text and "cierra sesión" in text
+    assert "no se terminó" in accounts.wrong_browser_account(None, "a@x.com")
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 (✔)
     tests = [(name, fn) for name, fn in globals().items() if name.startswith("test_")]
