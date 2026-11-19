@@ -387,6 +387,13 @@ def test_desktop_current_org(tmp):
         {desktop.ALLOWLIST + "c": "1970-01-01T00:00:04Z"}))
     assert desktop.current_org(data, switched={}) == "c"
     assert desktop.current_org(data, switched={"org": "d", "at": 5}) == "d"
+    # tras cambiarla nosotros, entra con otra cuenta (su lista de plugins es posterior)
+    import os
+    plugins = data / "plugin-list" / "cuenta" / "e" / "plugins.json"
+    plugins.parent.mkdir(parents=True)
+    plugins.write_text("[]")
+    os.utime(plugins, (6, 6))
+    assert desktop.current_org(data, switched={"org": "d", "at": 5}) == "e"
 
 
 def test_desktop_near_limit():

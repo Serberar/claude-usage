@@ -32,6 +32,7 @@ SESSION_DIRS = ("Network", "Local Storage", "Session Storage", "IndexedDB", "Web
 CONFIG_KEYS = ("lastKnownAccountUuid",)
 CONFIG_PREFIXES = ("oauth:",)
 ALLOWLIST = "dxt:allowlistLastUpdated:"  # lo escribe al entrar en cada organización
+FILES_FREE_WAIT = 15  # segundos esperando a que Windows suelte los archivos de la app
 
 
 def installed(data=DATA, install=INSTALL):
@@ -70,12 +71,19 @@ def _ms(value):
 
 def current_org(data=DATA, switched=None):
     """La organización con la que está la app de escritorio: la última de la que apuntó
-    algo (consumo o entrada en la organización) o a la que la cambiamos nosotros."""
+    algo (consumo, entrada en la organización, su lista de plugins) o a la que la
+    cambiamos nosotros. Si tras cambiarla se entra con otra cuenta, gana esa."""
     events = [(s["t"], s["org"]) for s in usage_samples(data)]
     for key, value in _read_json(data / "config.json").items():
         when = _ms(value) if key.startswith(ALLOWLIST) else None
         if when:
             events.append((when, key[len(ALLOWLIST):]))
+    # plugin-list/<cuenta>/<organización>/plugins.json: lo escribe al entrar en ella
+    for plugins in (data / "plugin-list").glob("*/*/plugins.json"):
+        try:
+            events.append((plugins.stat().st_mtime * 1000, plugins.parent.name))
+        except OSError:
+            pass
     switched = load_state().get("desktop_switch") if switched is None else switched
     if switched and switched.get("org"):
         events.append((switched.get("at", 0) * 1000, switched["org"]))
@@ -106,7 +114,7 @@ def save_profile(org, data=DATA, profiles=PROFILES):
     tmp.mkdir(parents=True)
     for name in SESSION_DIRS:
         if (data / name).exists():
-            shutil.copytree(data / name, tmp / name)
+            _copy_when_free(data / name, tmp / name)
     keys = _session_keys(_read_json(data / "config.json"))
     write_atomic(tmp / "config.json", json.dumps(keys, ensure_ascii=False, indent=2))
     old = target.with_name(target.name + ".viejo")
@@ -115,6 +123,22 @@ def save_profile(org, data=DATA, profiles=PROFILES):
         target.rename(old)
     tmp.rename(target)
     shutil.rmtree(old, ignore_errors=True)
+
+
+def _copy_when_free(source, target, wait=FILES_FREE_WAIT):
+    """Copia una carpeta. Recién cerrada la app, Windows puede tardar unos segundos en
+    soltar sus archivos (las cookies): se reintenta en vez de fallar a la primera."""
+    deadline = time.time() + wait
+    while True:
+        try:
+            shutil.copytree(source, target, dirs_exist_ok=True)
+            return
+        except (shutil.Error, PermissionError):
+            if time.time() > deadline:
+                raise StepError("la app de escritorio sigue usando sus archivos; ciérrala del "
+                                "todo (también del icono junto al reloj) y vuelve a "
+                                "intentarlo") from None
+            time.sleep(1)
 
 
 def restore_profile(org, data=DATA, profiles=PROFILES):
@@ -160,28 +184,27 @@ def desktop_pids():
     return pids
 
 
-def close_desktop(log, wait=20):
-    """Cierra la app de escritorio. Devuelve si estaba abierta."""
+def close_desktop(log, wait=15):
+    """Cierra la app de escritorio. Devuelve si estaba abierta. Directamente a la fuerza:
+    cerrarla como el botón de cerrar no funciona (Windows contesta que solo se puede de
+    forma forzada) y solo hacía esperar."""
     pids = desktop_pids()
     if not pids:
         return False
     log("Cerrando la app de escritorio…")
-    # primero como el botón de cerrar (guarda lo que tenga pendiente); si no, a la fuerza
-    for force in (False, True):
-        for pid in pids:
-            args = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if force else [])
-            try:
-                run(args)
-            except StepError:
-                pass  # ya se había cerrado
-        deadline = time.time() + (wait / 2)
-        while time.time() < deadline:
-            pids = desktop_pids()
-            if not pids:
-                time.sleep(1)  # que suelte los archivos
-                return True
-            time.sleep(0.5)
-    raise StepError("la app de escritorio no se cierra")
+    deadline = time.time() + wait
+    while pids:
+        args = ["taskkill", "/F", "/T"] + [part for pid in pids for part in ("/PID", str(pid))]
+        try:
+            run(args, ok_codes=(0, 128, 255))  # 128: alguno ya se había cerrado
+        except StepError:
+            pass
+        time.sleep(1)
+        pids = desktop_pids()
+        if pids and time.time() > deadline:
+            raise StepError("la app de escritorio no se cierra")
+    time.sleep(1)  # que Windows suelte sus archivos
+    return True
 
 
 def open_desktop():
