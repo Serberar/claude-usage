@@ -270,6 +270,8 @@ class App(ctk.CTk):
             for message in usage.alerts(before, account_list):
                 log.info("aviso: %s", message)
                 self.tray.notify(message)
+        if desktop.installed():
+            self.check_desktop_account(account_list)
         if relay_mcp.installed():
             self.update_relay_status(before, account_list)
         if len(account_list) > 1 and state.mode() == "auto":
@@ -304,6 +306,27 @@ class App(ctk.CTk):
             self.tray.notify(f"{usage.display_name(near)} va por el {relay_mcp.NEAR} %: desde "
                              "ahora Claude guarda solo el relevo. Si no lo hace, escribe "
                              "«relevo» en el chat")
+
+    def check_desktop_account(self, account_list):
+        """Tras pasar la app de escritorio a una cuenta sin sesión guardada, se entra a mano:
+        si se entra con otra (Google elige la que tenga abierta el navegador), se avisa."""
+        switched = state.load_state().get("desktop_switch") or {}
+        wanted, now = switched.get("org"), desktop.current_org()
+        if not wanted or not now or now == wanted:
+            return
+        if getattr(self, "desktop_mismatch_warned", None) == switched.get("at"):
+            return  # una vez por cambio
+        self.desktop_mismatch_warned = switched.get("at")
+        names = {acc.get("organizationUuid"): acc.get("email") or usage.display_name(acc)
+                 for acc in account_list}
+        message = (f"La app de escritorio ha entrado con {names.get(now, 'otra cuenta')}, no "
+                   f"con {names.get(wanted, 'la elegida')}. Cierra sesión en ella y entra con "
+                   "esa: con Google, «Usar otra cuenta»; si no, «Continuar con email»")
+        log.info("escritorio: %s", message)
+        self.status_hold_until = time.time() + STATUS_HOLD
+        self.status.configure(text=message, text_color=RED)
+        if self.tray:
+            self.tray.notify(message)
 
     def mode_changed(self):
         """Pestaña Uso: se ha pasado a automático o a manual."""
@@ -416,7 +439,9 @@ class App(ctk.CTk):
 
         def done_text(saved):
             if not saved:
-                return f"Inicia sesión con {name} en la app de escritorio"
+                return (f"Entra en la app de escritorio con {acc.get('email') or name}. Con "
+                        "Google, elige esa cuenta (si no sale, «Usar otra cuenta»); si no, "
+                        "«Continuar con email». Solo hace falta esta vez")
             if not automatic:
                 return None
             message = f"La app de escritorio ha pasado a {name}: la anterior estaba agotada."
