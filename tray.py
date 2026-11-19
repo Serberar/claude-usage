@@ -55,18 +55,28 @@ class Tray:
         yield pystray.Menu.SEPARATOR
         best = usage.best_account(self.accounts)
         if best:
+            number = best.get("number")
             yield pystray.MenuItem(
                 f"Usar la de más margen ({usage.display_name(best)})",
-                lambda: post(lambda: self.app.switch_to(best.get("number"))))
+                lambda: post(lambda: self.app.switch_to(number)))
         for acc in self.accounts:
-            yield pystray.MenuItem(
-                f"Usar {usage.display_name(acc)}",
-                (lambda n: lambda: post(lambda: self.app.switch_to(n)))(acc.get("number")),
-                checked=(lambda a: lambda _item: bool(a.get("active")))(acc),
-                radio=True,
-            )
+            yield self.account_item(acc)
         yield pystray.Menu.SEPARATOR
         yield pystray.MenuItem("Salir", lambda: post(self.app.quit_app))
+
+    def account_item(self, acc):
+        """Usar una cuenta. Sin poder usarse (sesión caducada o semanal agotado) sale, pero
+        apagada y diciendo por qué."""
+        number, view = acc.get("number"), usage.account_view(acc)
+        label = f"Usar {view['name']}"
+        if usage.needs_login(acc):
+            label += " (inicia sesión otra vez)"
+        elif usage.exhausted(acc, "sevenDay"):
+            label += " (agotada esta semana)"
+        return pystray.MenuItem(
+            label, lambda: self.app.post(lambda: self.app.switch_to(number)),
+            checked=lambda _item: view["active"], radio=True,
+            enabled=view["active"] or view["can_switch"])
 
     def update(self, accounts, shows):
         """shows: qué marca el icono (ver usage.tray_value)."""

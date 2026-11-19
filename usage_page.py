@@ -3,15 +3,18 @@
 import customtkinter as ctk
 
 import usage
-from theme import ACCENT, AMBER, BORDER, MUTED
-from widgets import Meter, Page, button, card, notice, pill, text
+from theme import ACCENT, AMBER, BORDER, GREEN, MUTED
+from widgets import Meter, Page, button, card, flat_button, notice, pill, text
 
 
 class AccountCard:
     """Una cuenta: nombre, si está en uso (o botón para usarla) y sus límites.
     Lo que se enseña lo decide usage.account_view; aquí solo se dibuja."""
 
-    def __init__(self, master, on_switch):
+    def __init__(self, master, actions):
+        """actions: switch(number), desktop(acc), login(acc) y desktop_installed()."""
+        self.actions = actions
+        on_switch = actions["switch"]
         self.frame, inner = card(master)
         self.frame.pack(fill="x", pady=(0, 12))
         self.acc = None
@@ -25,11 +28,19 @@ class AccountCard:
         self.email = text(self.names, "", 11, MUTED)
         self.badge = pill(head, "EN USO", ACCENT)
         self.switch = button(head, "Usar", lambda: on_switch(self.acc.get("number")))
+        # la app de escritorio lleva su propia cuenta, aparte de Claude Code
+        self.desk = ctk.CTkFrame(inner, fg_color="transparent")
+        text(self.desk, "App de escritorio", 11, MUTED).pack(side="left")
+        self.desk_badge = pill(self.desk, "EN USO", GREEN, color=("#ffffff", "#0e1015"))
+        self.desk_use = flat_button(self.desk, "Usar ahí", lambda: actions["desktop"](self.acc),
+                                    color=ACCENT, size=11)
         self.meters = {}
         for key, title in usage.LIMITS:
             self.meters[key] = Meter(inner, title)
             self.meters[key].pack(fill="x", pady=(0, 10))
         self.warning = text(inner, "", 11, AMBER, wrap=True)
+        self.login = button(inner, "Iniciar sesión", lambda: actions["login"](self.acc),
+                            primary=True)
 
     def update(self, acc):
         self.acc = acc
@@ -51,8 +62,16 @@ class AccountCard:
                              border_width=2 if view["active"] else 1)
 
         # se quitan y se vuelven a poner en orden: así un límite oculto vuelve a su sitio
-        for widget in (*self.meters.values(), self.warning):
+        for widget in (self.desk, *self.meters.values(), self.warning, self.login):
             widget.pack_forget()
+        if self.actions["desktop_installed"]():
+            self.desk.pack(fill="x", pady=(0, 10))
+            self.desk_badge.pack_forget()
+            self.desk_use.pack_forget()
+            if view["desktop"]:
+                self.desk_badge.pack(side="right")
+            elif view["can_use_on_desktop"]:
+                self.desk_use.pack(side="right")
         for key, meter in self.meters.items():
             shown = view["meters"][key]
             if not shown["visible"]:
@@ -71,6 +90,8 @@ class AccountCard:
         self.warning.configure(text=view["warning"])
         if view["warning"]:
             self.warning.pack(fill="x")
+        if view["login"]:
+            self.login.pack(anchor="w", pady=(8, 0))
 
     def tick(self):
         """Las cuentas atrás («en 2h 30m») avanzan sin esperar a cswap."""
@@ -82,9 +103,10 @@ class AccountCard:
 
 
 class UsagePage(Page):
-    def __init__(self, master, on_switch):
+    def __init__(self, master, actions):
         super().__init__(master)
-        self.on_switch = on_switch
+        self.actions = actions
+        on_switch = actions["switch"]
         self.cards = []
         self.best = None
         # arriba, solo si otra cuenta tiene claramente más margen que la que está en uso
@@ -93,7 +115,7 @@ class UsagePage(Page):
 
     def show(self, accounts):
         while len(self.cards) < len(accounts):
-            self.cards.append(AccountCard(self.body, self.on_switch))
+            self.cards.append(AccountCard(self.body, self.actions))
         while len(self.cards) > len(accounts):
             self.cards.pop().destroy()
         for account_card, acc in zip(self.cards, accounts):

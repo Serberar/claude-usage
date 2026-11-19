@@ -1,0 +1,109 @@
+# Al subir una etiqueta vX.Y.Z: pruebas, compilar el .exe y el instalador en GitHub (no en el
+# ordenador de nadie) y dejar una release en BORRADOR con los dos archivos. Nada llega a las
+# copias instaladas hasta que se publica el borrador a mano.
+#
+# Firma con SignPath (gratis para código abierto) si están configurados:
+#   secreto   SIGNPATH_API_TOKEN
+#   variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG
+# Sin ellos se publica igual, sin firmar. El .exe se firma antes de meterlo en el instalador,
+# y luego se firma el instalador.
+name: Publicar versión
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # crear la release
+  actions: read    # SignPath lee el artefacto subido
+
+jobs:
+  publicar:
+    runs-on: windows-latest
+    env:
+      SIGN: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: La etiqueta coincide con version.py
+        shell: powershell
+        run: |
+          $version = (Select-String -Path version.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "La etiqueta ${{ github.ref_name }} no es la versión de version.py ($version)" }
+
+      - name: Preparar
+        run: |
+          pip install -r requirements.txt pyinstaller==6.22.3
+          choco install innosetup -y --no-progress
+
+      - name: Pruebas
+        run: python tests.py
+
+      - name: Compilar el .exe
+        shell: powershell
+        run: .\build.ps1 -Only exe
+
+      - name: Subir el .exe para firmarlo
+        if: env.SIGN == 'true'
+        id: exe-sin-firmar
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/ClaudeUsage.exe
+          archive: false
+
+      - name: Firmar el .exe
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.exe-sin-firmar.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: firmado/exe
+
+      - name: Usar el .exe firmado
+        if: env.SIGN == 'true'
+        shell: powershell
+        run: Copy-Item firmado\exe\ClaudeUsage.exe dist\ClaudeUsage.exe -Force
+
+      - name: Compilar el instalador
+        shell: powershell
+        run: .\build.ps1 -Only installer
+
+      - name: Subir el instalador para firmarlo
+        if: env.SIGN == 'true'
+        id: setup-sin-firmar
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/ClaudeUsage-Setup.exe
+          archive: false
+
+      - name: Firmar el instalador
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.setup-sin-firmar.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: firmado/setup
+
+      - name: Usar el instalador firmado
+        if: env.SIGN == 'true'
+        shell: powershell
+        run: Copy-Item firmado\setup\ClaudeUsage-Setup.exe dist\ClaudeUsage-Setup.exe -Force
+
+      - name: Crear la release en borrador
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" dist/ClaudeUsage.exe dist/ClaudeUsage-Setup.exe
+          --draft --title "Claude Usage ${{ github.ref_name }}" --generate-notes

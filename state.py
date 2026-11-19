@@ -43,6 +43,7 @@ SETTINGS = {
     "notify": True,          # avisos de Windows (cerca del límite, cuenta disponible otra vez)
     "auto_switch": False,    # cambiar de cuenta solo al llegar al umbral (cswap auto)
     "auto_threshold": 90,    # % del límite que va peor
+    "desktop_auto": False,   # pasar la app de escritorio a otra cuenta cuando se agota
     "tray_shows": "five",    # qué marca el icono: "five", "week" o "worst"
 }
 

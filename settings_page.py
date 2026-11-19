@@ -1,16 +1,20 @@
 """La pestaña Ajustes: preparar lo que falta, las cuentas, los plugins y las opciones
 generales. La página solo coloca las secciones; cada una es su propia clase."""
 
+import os
 import tkinter as tk
 import tkinter.messagebox as messagebox
 
 import customtkinter as ctk
 
 import accounts
+import applog
 import autostart
 import catalog
+import desktop
 import plugins
 import prerequisites
+import relay_mcp
 import state
 from plugins_page import plugin_details
 from theme import ACCENT, AMBER, GREEN, MUTED, ON_ACCENT, RED, TEXT, TRACK, font
@@ -92,14 +96,25 @@ class SettingsPage(Page):
             self.plugin_section.render(self.section("Plugins"), self.plugins)
         self.general_section.render(self.section("General"))
         info = self.section("Información")
-        for line in ("El consumo se actualiza solo cada minuto; con ⟳ al momento.",
+        for line in ("El consumo se actualiza solo cada minuto; con ⟳ al momento. Los "
+                     "límites son de la cuenta: Claude Code y la app de escritorio gastan "
+                     "del mismo %.",
                      "La raya de la barra semanal marca lo que deberías llevar gastado "
                      "para llegar justo al reinicio: si la barra la pasa, vas rápido.",
                      "Los avisos de Windows saltan cuando la cuenta en uso pasa del 90 % del "
-                     "límite de 5 horas y cuando una cuenta agotada vuelve a estar disponible.",
+                     "límite de 5 horas, cuando una cuenta agotada vuelve a estar disponible "
+                     "y cuando la sesión de una cuenta caduca o está a punto.",
                      "El cambio automático usa claude-swap: cambia a la cuenta con más margen "
-                     "cuando la que usas llega al límite elegido."):
+                     "cuando la que usas llega al límite elegido. La app de escritorio cambia "
+                     "al agotarse la suya, a una cuenta que ya hayas usado ahí."):
             text(info, line, 12, MUTED, wrap=True).pack(fill="x", pady=(8, 0))
+        link(info, "Abrir el registro de errores", self.open_log)
+
+    def open_log(self):
+        """Para ver qué ha fallado (o mandárselo a quien lo vaya a arreglar)."""
+        folder = applog.LOG_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(applog.LOG_FILE if applog.LOG_FILE.exists() else folder)
 
     def section(self, title):
         return fold_card(self.body, title, self.open_sections)
@@ -387,6 +402,22 @@ class GeneralSection:
             else:
                 threshold.pack_forget()
         show_threshold()
+        if desktop.installed():
+            relay = tk.BooleanVar(value=relay_mcp.installed())
+            switch(box, "Relevo de conversaciones (escritorio)", relay,
+                   lambda: self.flip(relay, relay_mcp.set_installed, "Relevo"))
+            text(box, "Hasta el 90 % no gasta nada. A partir de ahí, Claude guarda solo un "
+                      "resumen de la conversación (o escribe «relevo»). "
+                      "Tras el cambio de cuenta, escribe «continúa» en un "
+                      "chat nuevo y sigue donde lo dejó. Se activa al volver a abrir la app de "
+                      "escritorio; la primera vez, pulsa «Permitir siempre» cuando lo pida.",
+                 11, MUTED, wrap=True).pack(fill="x", pady=(4, 0))
+            self.setting_switch(box, "Cambiar la app de escritorio al agotarse",
+                                "desktop_auto")
+            text(box, "Se cierra y se vuelve a abrir con la cuenta que tenga más margen; la "
+                      "conversación se queda en la cuenta anterior. Solo pasa a cuentas que "
+                      "ya hayas usado en la app de escritorio desde aquí (botón «Usar ahí»).",
+                 11, MUTED, wrap=True).pack(fill="x", pady=(4, 0))
 
     def setting_switch(self, box, label, name, after=None):
         """Interruptor de una opción guardada (state.SETTINGS)."""

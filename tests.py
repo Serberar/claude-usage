@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import catalog
+import desktop
 import plugins
 import state
 import system
@@ -269,7 +270,203 @@ def test_download_update(tmp):
         updater.github_request, sys.executable = real_request, real_executable
 
 
+def test_desktop_usage():
+    org1, org2 = "org-1", "org-2"
+    t = NOW - timedelta(minutes=5)
+    latest = {org1: {"t": t.timestamp() * 1000, "org": org1, "u": {"fh": 40, "sd": 70}}}
+    old_reset = iso(NOW + timedelta(days=2))
+    accs = [
+        # sesión de Claude Code caducada: cswap no sabe el consumo, la app de escritorio sí
+        {"number": 1, "organizationUuid": org1, "usageStatus": "relogin_required",
+         "usage": None, "lastGoodUsage": {"sevenDay": {"pct": 10, "resetsAt": old_reset},
+                                           "fiveHour": {"pct": 99, "resetsAt": iso(t - timedelta(hours=1))}}},
+        {"number": 2, "organizationUuid": org2, "active": True, "usageStatus": "ok",
+         "usage": {"fiveHour": {"pct": 5}}},
+    ]
+    usage.add_desktop(accs, latest, org1)
+    assert accs[0]["desktop"] and not accs[1]["desktop"]
+    assert usage.used(accs[0], "fiveHour") == 40 and usage.used(accs[0], "sevenDay") == 70
+    assert accs[0]["usage"]["sevenDay"]["resetsAt"] == old_reset   # la recarga posterior vale
+    assert "resetsAt" not in accs[0]["usage"]["fiveHour"]          # la de antes del dato, no
+    assert "app de escritorio" in usage.window_note(accs[0]["usage"]["fiveHour"])
+    assert usage.used(accs[1], "fiveHour") == 5                     # sin dato del escritorio
+    # el escritorio apunta que se agotó después de la última lectura de cswap: manda él
+    fresh = {"number": 3, "organizationUuid": org1, "usageStatus": "ok",
+             "usageFetchedAt": iso(t - timedelta(minutes=8)),
+             "usage": {"fiveHour": {"pct": 93, "resetsAt": iso(NOW + timedelta(hours=1))}}}
+    newer = dict(fresh, usageFetchedAt=iso(t + timedelta(minutes=1)),
+                 usage={"fiveHour": {"pct": 93}})
+    usage.add_desktop([fresh, newer], latest, org1)
+    assert usage.used(fresh, "fiveHour") == 40 and fresh["usage"]["fiveHour"]["resetsAt"]
+    assert usage.used(newer, "fiveHour") == 93                      # el de cswap es más nuevo
+    view = usage.account_view(accs[0])
+    assert view["login"] and not view["can_switch"] and view["desktop"]
+    assert "caducó" in view["warning"]
+    assert usage.best_account(accs) is None  # no propone una cuenta que no se puede usar
+
+
+def test_login_expires_soon():
+    soon = {"usageStatus": "ok", "loginExpiresAt": iso(NOW + timedelta(days=1))}
+    later = {"usageStatus": "ok", "loginExpiresAt": iso(NOW + timedelta(days=20))}
+    assert usage.login_expires_soon(soon, NOW) and not usage.login_expires_soon(later, NOW)
+    assert usage.account_view(soon, NOW)["login"]
+    assert not usage.account_view(later, NOW)["login"]
+    before = [{"number": 1, "usageStatus": "ok"}]
+    after = [{"number": 1, "usageStatus": "relogin_required"}]
+    assert any("caducó" in m for m in usage.alerts(before, after))
+    soon_now = [{"number": 1, "usageStatus": "ok",
+                 "loginExpiresAt": iso(datetime.now(timezone.utc) + timedelta(days=1))}]
+    assert any("caduca" in m for m in usage.alerts(before, soon_now))
+    assert not usage.alerts(soon_now, soon_now)                     # solo una vez
+
+
+def test_desktop_target():
+    def acc(org, five, desk=False):
+        return {"organizationUuid": org, "desktop": desk, "usage": {"fiveHour": {"pct": five}}}
+    full, free, other = acc("a", 100, True), acc("b", 20), acc("c", 50)
+    assert usage.desktop_target([full, free, other], lambda org: True) == (free, None)
+    assert usage.desktop_target([full, free, other], lambda org: org == "c") == (other, None)
+    target, warning = usage.desktop_target([full, free], lambda org: False)  # sin sesión
+    assert target is None and "Usar ahí" in warning
+    assert usage.desktop_target([acc("a", 50, True), free], lambda org: True) == (None, None)
+    assert usage.desktop_target([full, acc("b", 100)], lambda org: True) == (None, None)
+
+
+def test_desktop_profiles(tmp):
+    data, profiles = tmp / "Claude", tmp / "perfiles"
+    (data / "Network").mkdir(parents=True)
+    (data / "Network" / "Cookies").write_text("cuenta1")
+    (data / "IndexedDB").mkdir()
+    (data / "config.json").write_text(json.dumps(
+        {"locale": "es-ES", "oauth:tokenCache": "t1", "lastKnownAccountUuid": "u1"}))
+    desktop.save_profile("org-1", data, profiles)
+    assert desktop.has_profile("org-1", profiles) and not desktop.has_profile("org-2", profiles)
+    # a una cuenta sin sesión guardada: se queda sin sesión, pero los ajustes siguen
+    assert not desktop.restore_profile("org-2", data, profiles)
+    config = json.loads((data / "config.json").read_text())
+    assert config == {"locale": "es-ES"} and not (data / "Network").exists()
+    # la otra cuenta inicia sesión, se guarda y se vuelve a la primera
+    (data / "Network").mkdir()
+    (data / "Network" / "Cookies").write_text("cuenta2")
+    config["oauth:tokenCache"] = "t2"
+    (data / "config.json").write_text(json.dumps(config))
+    desktop.save_profile("org-2", data, profiles)
+    assert desktop.restore_profile("org-1", data, profiles)
+    assert (data / "Network" / "Cookies").read_text() == "cuenta1"
+    config = json.loads((data / "config.json").read_text())
+    assert config["oauth:tokenCache"] == "t1" and config["locale"] == "es-ES"
+    assert desktop.restore_profile("org-2", data, profiles)
+    assert (data / "Network" / "Cookies").read_text() == "cuenta2"
+    # al guardar otra vez no quedan carpetas a medias
+    desktop.save_profile("org-2", data, profiles)
+    assert sorted(p.name for p in profiles.iterdir()) == ["org-1", "org-2"]
+
+
+def test_desktop_current_org(tmp):
+    data = tmp / "Claude"
+    data.mkdir()
+    (data / "plan-usage-history.json").write_text(json.dumps({"samples": [
+        {"t": 1000, "org": "a", "u": {"fh": 1}}, {"t": 3000, "org": "b", "u": {"fh": 2}},
+        {"t": 2000, "org": "a", "u": {"fh": 3}}]}))
+    assert desktop.latest_samples(desktop.usage_samples(data))["a"]["t"] == 2000
+    assert desktop.current_org(data, switched={}) == "b"
+    # entrar en otra organización después cuenta, y que la cambiemos nosotros también
+    (data / "config.json").write_text(json.dumps(
+        {desktop.ALLOWLIST + "c": "1970-01-01T00:00:04Z"}))
+    assert desktop.current_org(data, switched={}) == "c"
+    assert desktop.current_org(data, switched={"org": "d", "at": 5}) == "d"
+
+
+def test_desktop_near_limit():
+    def acc(five, desk=True):
+        return {"number": 1, "desktop": desk, "usage": {"fiveHour": {"pct": five}}}
+    assert usage.desktop_near_limit([acc(85)], [acc(91)])["number"] == 1
+    assert usage.desktop_near_limit([acc(91)], [acc(93)]) is None       # solo al cruzar
+    assert usage.desktop_near_limit([acc(85)], [acc(100)]) is None      # ya es tarde
+    assert usage.desktop_near_limit([acc(85, False)], [acc(91, False)]) is None
+
+
+def test_relay(tmp):
+    import relay_mcp
+    out = io.BytesIO()
+    pct = {"value": 50}
+    server = relay_mcp.Server(out, tmp, pct=lambda: pct["value"])
+    reply = server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                           "params": {"protocolVersion": "2025-03-26"}})
+    assert reply["result"]["protocolVersion"] == "2025-03-26"
+    assert reply["result"]["capabilities"]["tools"]["listChanged"]
+    assert server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
+    # por debajo del 90 %: Claude solo guarda si se lo piden, y no se avisa de nada
+    listed = server.handle({"id": 2, "method": "tools/list"})["result"]["tools"]
+    assert [t["name"] for t in listed] == ["guardar_relevo", "leer_relevo"]
+    assert "No la llames por tu cuenta" in listed[0]["description"]
+    assert not server.check() and out.getvalue() == b""
+    # al cruzar el 90 %: un aviso (uno solo) y la lista nueva le dice que guarde solo
+    pct["value"] = 93
+    assert server.check() and not server.check()
+    assert b"notifications/tools/list_changed" in out.getvalue()
+    listed = server.handle({"id": 3, "method": "tools/list"})["result"]["tools"]
+    assert "93 %" in listed[0]["description"] and "sin que el usuario" in listed[0]["description"]
+    pct["value"] = 0  # recargada: vuelve a avisar para dejar de gastar
+    assert server.check()
+    # de dónde sale el %: lo que apunta Claude Usage, mientras sea reciente
+    relay_mcp.write_status(50, tmp, now=1000)
+    assert relay_mcp.desktop_pct(tmp, now=1060) == 50
+    text, error = relay_mcp.call_tool("leer_relevo", {}, tmp)
+    assert not error and "No hay" in text
+    assert relay_mcp.call_tool("guardar_relevo", {"resumen": " "}, tmp)[1]
+    for i in range(relay_mcp.KEEP + 3):
+        relay_mcp.save_relay(f"paso {i}", "prueba", tmp, NOW + timedelta(seconds=i))
+    text, error = relay_mcp.call_tool("leer_relevo", {}, tmp)
+    assert not error and f"paso {relay_mcp.KEEP + 2}" in text and "Relevo: prueba" in text
+    assert len(list((tmp / "anteriores").glob("*.md"))) == relay_mcp.KEEP
+    # darlo de alta sin tocar lo demás de la configuración, y quitarlo
+    config = tmp / "claude_desktop_config.json"
+    config.write_text(json.dumps({"preferences": {"a": 1}}))
+    relay_mcp.set_installed(True, config, {"command": "x", "args": []})
+    assert relay_mcp.installed(config)
+    assert json.loads(config.read_text())["preferences"] == {"a": 1}
+    relay_mcp.set_installed(False, config)
+    assert json.loads(config.read_text()) == {"preferences": {"a": 1}}
+    config.write_text("{roto")
+    try:
+        relay_mcp.set_installed(True, config)
+        raise AssertionError("pisó una configuración rota")
+    except OSError:
+        pass
+
+
+def test_list_accounts_format():
+    import accounts
+    real = accounts.cswap
+    try:
+        accounts.cswap = lambda *a, **k: json.dumps(
+            {"schemaVersion": 1, "accounts": [{"number": 1}, "basura"]})
+        assert accounts.list_accounts() == [{"number": 1}] and not accounts.schema_too_new()
+        accounts.cswap = lambda *a, **k: json.dumps({"schemaVersion": 2, "accounts": []})
+        assert accounts.list_accounts() == [] and accounts.schema_too_new()
+        for broken in ("no es json", "[1, 2]", json.dumps({"accounts": "x"})):
+            accounts.cswap = lambda *a, b=broken, **k: b
+            try:
+                accounts.list_accounts()
+                raise AssertionError(f"aceptó {broken!r}")
+            except accounts.StepError:
+                pass
+    finally:
+        accounts.cswap = real
+
+
+def test_cannot_switch_to_dead_login():
+    dead = {"number": 1, "usageStatus": "relogin_required", "usage": None}
+    full = {"number": 2, "usage": {"sevenDay": {"pct": 100}}}
+    ok = {"number": 3, "usage": {"fiveHour": {"pct": 10}}}
+    assert not usage.account_view(dead)["can_switch"]
+    assert not usage.account_view(full)["can_switch"]
+    assert usage.account_view(ok)["can_switch"]
+
+
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 (✔)
     tests = [(name, fn) for name, fn in globals().items() if name.startswith("test_")]
     for name, fn in tests:
         if fn.__code__.co_argcount:
