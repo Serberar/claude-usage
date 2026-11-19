@@ -381,19 +381,26 @@ def test_desktop_current_org(tmp):
         {"t": 1000, "org": "a", "u": {"fh": 1}}, {"t": 3000, "org": "b", "u": {"fh": 2}},
         {"t": 2000, "org": "a", "u": {"fh": 3}}]}))
     assert desktop.latest_samples(desktop.usage_samples(data))["a"]["t"] == 2000
-    assert desktop.current_org(data, switched={}) == "b"
+    assert desktop.current_org(data, log=data / 'main.log', switched={}) == "b"
     # entrar en otra organización después cuenta, y que la cambiemos nosotros también
     (data / "config.json").write_text(json.dumps(
         {desktop.ALLOWLIST + "c": "1970-01-01T00:00:04Z"}))
-    assert desktop.current_org(data, switched={}) == "c"
-    assert desktop.current_org(data, switched={"org": "d", "at": 5}) == "d"
+    assert desktop.current_org(data, log=data / 'main.log', switched={}) == "c"
+    assert desktop.current_org(data, log=data / 'main.log', switched={"org": "d", "at": 5}) == "d"
     # tras cambiarla nosotros, entra con otra cuenta (su lista de plugins es posterior)
     import os
     plugins = data / "plugin-list" / "cuenta" / "e" / "plugins.json"
     plugins.parent.mkdir(parents=True)
     plugins.write_text("[]")
     os.utime(plugins, (6, 6))
-    assert desktop.current_org(data, switched={"org": "d", "at": 5}) == "e"
+    assert desktop.current_org(data, log=data / 'main.log', switched={"org": "d", "at": 5}) == "e"
+    # lo que más manda: el registro de la app dice en qué organización entró y cuándo
+    (data / "main.log").write_text(
+        "2026-11-19 17:03:09 [info] otra cosa\n"
+        "2026-11-19 17:03:10 [info] [LocalSessionManager] Org changed from null to "
+        "29a13ee8-a3bd-4fb9-9a8b-ca6eaa505ec2, reinitializing sessions\n", encoding="utf-8")
+    assert desktop.current_org(data, log=data / "main.log",
+                               switched={"org": "d", "at": 5}) == "29a13ee8-a3bd-4fb9-9a8b-ca6eaa505ec2"
 
 
 def test_desktop_near_limit():

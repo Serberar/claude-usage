@@ -1,6 +1,8 @@
 """La pestaña Uso: arriba, cómo se usan las cuentas (automático o qué cuenta va en Claude
 Code y en la app de escritorio); debajo, una tarjeta por cuenta con sus dos límites."""
 
+from tkinter import messagebox
+
 import customtkinter as ctk
 
 import state
@@ -115,13 +117,29 @@ class UseCard:
 
     def pick_code(self, label):
         acc = self.account_named(label)
-        if acc and not acc.get("active"):
+        if not acc or acc.get("active"):
+            return
+        if self.confirm(f"¿Pasar Claude Code a {usage.display_name(acc)}?",
+                        "Las sesiones abiertas siguen, ahora con esa cuenta."):
             self.actions["switch"](acc.get("number"))
 
     def pick_desktop(self, label):
         acc = self.account_named(label, for_code=False)
-        if acc and not acc.get("desktop"):
+        if not acc or acc.get("desktop"):
+            return
+        if self.confirm(f"¿Pasar la app de escritorio a {usage.display_name(acc)}?",
+                        "Se cerrará y se volverá a abrir con esa cuenta. La conversación "
+                        "abierta se queda en la cuenta anterior."):
             self.actions["desktop"](acc)
+
+    def confirm(self, question, detail):
+        """Un desplegable se cambia sin querer con facilidad: se pregunta antes. Si se dice
+        que no, vuelve a enseñar la cuenta que había."""
+        if messagebox.askyesno("Cambiar de cuenta", f"{question}\n\n{detail}",
+                               parent=self.frame):
+            return True
+        self.update(self.accounts)
+        return False
 
 
 class AccountCard:
