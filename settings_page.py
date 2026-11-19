@@ -199,7 +199,9 @@ class AccountsSection:
                        accounts.save_current_account)
 
     def add_account(self):
-        self.page.task("Abriendo el inicio de sesión…", accounts.add_another_account)
+        app = self.page.app
+        self.page.task("Abriendo el inicio de sesión…", lambda log: accounts.add_another_account(
+            log, lambda url, done: app.ask_login_code(url, done, "la otra cuenta")))
 
     def remove(self, acc):
         name = acc.get("alias") or acc.get("email", "?")

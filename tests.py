@@ -469,8 +469,44 @@ def test_cannot_switch_to_dead_login():
 def test_wrong_browser_account():
     import accounts
     text = accounts.wrong_browser_account("b@x.com", "a@x.com")
-    assert "b@x.com" in text and "a@x.com" in text and "cierra sesión" in text
+    assert "b@x.com" in text and "a@x.com" in text and "ventana privada" in text
     assert "no se terminó" in accounts.wrong_browser_account(None, "a@x.com")
+
+
+FAKE_LOGIN = """
+import sys
+print("Opening browser to sign in...")
+print("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x")
+print("Paste code here if prompted > ", end="", flush=True)
+code = sys.stdin.readline().strip()
+if code == "bueno#estado":
+    print("Login successful")
+    sys.exit(0)
+print("Login failed: Request failed with status code 400")
+sys.exit(1)
+"""
+
+
+def test_login_with_code(tmp):
+    import accounts
+    fake = tmp / "fake_login.py"
+    fake.write_text(FAKE_LOGIN, encoding="utf-8")
+    args = [sys.executable, str(fake)]
+    seen = {}
+
+    def ask(code):
+        def ask_code(url, finished):
+            seen["url"] = url
+            return code
+        return ask_code
+    accounts.wait_login(args, ask("bueno#estado"))  # el código bueno: sin error
+    assert seen["url"] == "https://claude.com/cai/oauth/authorize?code=true&state=x"
+    for code, expected in (("malo", "el código no vale"), (None, "cancelado")):
+        try:
+            accounts.wait_login(args, ask(code))
+            raise AssertionError(f"aceptó {code!r}")
+        except accounts.StepError as exc:
+            assert expected in str(exc), exc
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 (✔)
