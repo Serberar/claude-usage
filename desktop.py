@@ -14,6 +14,7 @@ cswap no pueda leerlo (por ejemplo, si la sesión de Claude Code de esa cuenta c
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -27,6 +28,7 @@ from system import NO_WINDOW, StepError, run, write_atomic
 DATA = Path(os.environ.get("APPDATA", Path.home())) / "Claude"
 INSTALL = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "AnthropicClaude"
 PROFILES = STATE_FILE.parent / "desktop"
+LOG = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Claude" / "logs" / "main.log"
 # lo que cambia de una cuenta a otra; el resto (ajustes, caché, sesiones de Code) se queda
 SESSION_DIRS = ("Network", "Local Storage", "Session Storage", "IndexedDB", "WebStorage")
 CONFIG_KEYS = ("lastKnownAccountUuid",)
@@ -69,7 +71,30 @@ def _ms(value):
         return None
 
 
-def current_org(data=DATA, switched=None):
+ORG_CHANGED = re.compile(
+    r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\S* .*Org changed from \S+ to ([0-9a-f-]{36})")
+LOG_TAIL = 2_000_000  # bytes del final del registro que se leen (crece mucho)
+
+
+def log_org_changes(log=LOG):
+    """Cuándo entró la app de escritorio en cada organización, según su registro: lo
+    apunta en el momento de entrar ("Org changed from … to …"). [(ms, organización)]."""
+    try:
+        with open(log, "rb") as handle:
+            handle.seek(max(0, log.stat().st_size - LOG_TAIL))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    events = []
+    for line in lines:
+        match = ORG_CHANGED.match(line)
+        if match:
+            when = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")  # hora local
+            events.append((when.timestamp() * 1000, match.group(2)))
+    return events
+
+
+def current_org(data=DATA, switched=None, log=None):
     """La organización con la que está la app de escritorio: la última de la que apuntó
     algo (consumo, entrada en la organización, su lista de plugins) o a la que la
     cambiamos nosotros. Si tras cambiarla se entra con otra cuenta, gana esa."""
@@ -78,12 +103,13 @@ def current_org(data=DATA, switched=None):
         when = _ms(value) if key.startswith(ALLOWLIST) else None
         if when:
             events.append((when, key[len(ALLOWLIST):]))
-    # plugin-list/<cuenta>/<organización>/plugins.json: lo escribe al entrar en ella
+    # plugin-list/<cuenta>/<organización>/plugins.json: lo escribe al rato de entrar
     for plugins in (data / "plugin-list").glob("*/*/plugins.json"):
         try:
             events.append((plugins.stat().st_mtime * 1000, plugins.parent.name))
         except OSError:
             pass
+    events += log_org_changes(LOG if log is None else log)
     switched = load_state().get("desktop_switch") if switched is None else switched
     if switched and switched.get("org"):
         events.append((switched.get("at", 0) * 1000, switched["org"]))
