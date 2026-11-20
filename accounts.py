@@ -1,9 +1,14 @@
 """Las cuentas de Claude Code: las guarda y las cambia claude-swap (cswap)."""
 
+import hashlib
 import json
+import os
 import re
 import subprocess
 import threading
+import time
+import urllib.request
+from pathlib import Path
 
 from prerequisites import ensure
 from system import NO_WINDOW, StepError, find, quiet, run
@@ -39,8 +44,71 @@ def schema_too_new():
     return isinstance(_schema_seen, int) and _schema_seen > SCHEMA_VERSION
 
 
-def switch_account(number):
+def switch_account(number, email=None):
+    """Pasa Claude Code a la cuenta number y comprueba que el token que queda puesto es de
+    esa cuenta (email). cswap decide qué cuenta hay por ~/.claude.json, y ese archivo puede
+    decir una cuenta mientras el token es de otra: entonces gastas de la que no crees."""
     cswap("switch", str(number))
+    if not email:
+        return
+    live = live_email()
+    if live and live != email.lower():
+        raise StepError(f"cswap dice que ha cambiado, pero Claude Code sigue gastando de "
+                        f"{live}. Cierra las sesiones de Claude Code y vuelve a intentarlo")
+
+
+# ── qué cuenta gasta de verdad Claude Code ──
+#
+# Claude Code gasta con el token de .credentials.json. Su ~/.claude.json dice qué cuenta
+# hay, pero se puede quedar con otra (ver switch_account), y de él se fían cswap, `claude
+# auth status` y /usage. El token se le pregunta a Anthropic: una vez por token.
+
+CREDENTIALS = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") \
+    / ".credentials.json"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+PROFILE_RETRY = 300  # segundos sin volver a preguntar por un token que no se pudo leer
+_identity = {}       # huella del token -> email (o el momento del fallo)
+_identity_lock = threading.Lock()
+
+
+def _profile_email(token):
+    request = urllib.request.Request(PROFILE_URL, headers={
+        "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.load(response)
+    except (OSError, ValueError):
+        return None
+    account = data.get("account") if isinstance(data, dict) else None
+    email = account.get("email") if isinstance(account, dict) else None
+    return email.lower() if isinstance(email, str) and email else None
+
+
+def live_email(path=None, fetch=_profile_email, now=time.time):
+    """El email de la cuenta con la que Claude Code gasta ahora, o None si no se sabe (sin
+    sesión, sin internet o con el token caducado hasta que Claude Code lo renueve)."""
+    try:
+        data = json.loads((path or CREDENTIALS).read_text(encoding="utf-8"))
+        token = data["claudeAiOauth"]["accessToken"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(token, str) or not token:
+        return None
+    key = hashlib.sha256(token.encode()).hexdigest()
+    with _identity_lock:
+        known = _identity.get(key)
+    if isinstance(known, str):
+        return known
+    if isinstance(known, float) and now() - known < PROFILE_RETRY:
+        return None
+    email = fetch(token)
+    with _identity_lock:
+        if email:
+            _identity.clear()  # solo hace falta el del token de ahora
+            _identity[key] = email
+        else:
+            _identity[key] = float(now())
+    return email
 
 
 def auto_switch(threshold):

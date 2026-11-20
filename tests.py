@@ -534,6 +534,75 @@ def test_login_with_code(tmp):
         except accounts.StepError as exc:
             assert expected in str(exc), exc
 
+def test_live_account():
+    # lo que pasó el 20-11-2026: cswap (por ~/.claude.json) decía 1, el token era de 2
+    accs = [acc_with(1, 29, 54, active=True), acc_with(2, 99, 94)]
+    assert usage.apply_live(accs, "C2@x") is None
+    assert [a["active"] for a in accs] == [False, True]  # en uso, la que gasta
+    assert [a["cswapActive"] for a in accs] == [True, False]
+    assert usage.code_repair(accs, "c1@x")["number"] == 1  # vuelve a la elegida
+    assert usage.code_repair(accs, None)["number"] == 1    # sin elegida, a la de cswap
+    # el token es de la elegida pero ~/.claude.json no: se arregla cswap (misma cuenta)
+    assert usage.code_repair(accs, "c2@x")["number"] == 2
+    # cambiada fuera de la app (cswap a mano, /login): token y config de acuerdo, se respeta
+    accs = [acc_with(1, 29, 54), acc_with(2, 10, 20, active=True)]
+    usage.apply_live(accs, "c2@x")
+    assert usage.code_repair(accs, "c1@x") is None
+    # sin poder leer el token no se toca nada
+    accs = [acc_with(1, 29, 54, active=True), acc_with(2, 10, 20)]
+    assert usage.apply_live(accs, None) is None
+    assert accs[0]["active"] and usage.code_repair(accs, "c2@x") is None
+    # token de una cuenta que no está guardada: ninguna en uso, se vuelve a la elegida
+    accs = [acc_with(1, 29, 54, active=True), acc_with(2, 10, 20)]
+    assert usage.apply_live(accs, "otra@x") == "otra@x"
+    assert not any(a["active"] for a in accs)
+    assert usage.code_repair(accs, "c1@x")["number"] == 1
+    # a la elegida no se vuelve si su sesión caducó
+    accs = [acc_with(1, 29, 54, active=True), acc_with(2, 10, 20)]
+    accs[0]["usageStatus"] = "token_expired"
+    usage.apply_live(accs, "c2@x")
+    assert usage.code_repair(accs, "c1@x") is None
+
+
+def test_live_email(tmp):
+    import accounts
+    creds = tmp / ".credentials.json"
+    asked = []
+
+    def fetch(token):
+        asked.append(token)
+        return {"t1": "a@x", "t2": "b@x"}.get(token)
+
+    clock = [1000.0]
+    now = lambda: clock[0]  # noqa: E731
+    assert accounts.live_email(creds, fetch, now) is None  # sin archivo
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "t1"}}))
+    assert accounts.live_email(creds, fetch, now) == "a@x"
+    assert accounts.live_email(creds, fetch, now) == "a@x"
+    assert asked == ["t1"]  # una vez por token
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "t2"}}))
+    assert accounts.live_email(creds, fetch, now) == "b@x"
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "malo"}}))
+    assert accounts.live_email(creds, fetch, now) is None
+    assert accounts.live_email(creds, fetch, now) is None
+    assert asked.count("malo") == 1  # el fallo no se repite cada minuto…
+    clock[0] += accounts.PROFILE_RETRY
+    accounts.live_email(creds, fetch, now)
+    assert asked.count("malo") == 2  # …pero se vuelve a probar
+
+
+def test_stale_usage():
+    acc = acc_with(1, 49, 88)
+    acc["usageFetchedAt"] = iso(NOW - timedelta(minutes=54))
+    assert usage.stale_minutes(acc, NOW) == 54
+    assert "Dato de hace 54 min" in usage.account_view(acc, NOW)["warning"]
+    acc["usageFetchedAt"] = iso(NOW - timedelta(minutes=5))
+    assert usage.stale_minutes(acc, NOW) is None
+    assert usage.account_view(acc, NOW)["warning"] == ""
+    acc["usageFetchedAt"] = iso(NOW - timedelta(minutes=75))
+    assert "hace 1 h 15 min" in usage.account_view(acc, NOW)["warning"]
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no es UTF-8 (✔)
     tests = [(name, fn) for name, fn in globals().items() if name.startswith("test_")]

@@ -250,7 +250,7 @@ class App(ctk.CTk):
         self.settings_page.refresh()
         self.plugins_page.refresh()
 
-    def show_usage(self, account_list, error):
+    def show_usage(self, result, error):
         self.busy = False
         if error:
             self.status.configure(text=f"Error: {error}", text_color=RED)
@@ -258,6 +258,7 @@ class App(ctk.CTk):
                 self.sent_to_setup = True  # solo la primera vez, para no secuestrar la ventana
                 self.show_tab("Ajustes")
             return
+        account_list, unknown = result
         usage.forget_past_windows(account_list, datetime.now(timezone.utc))
         before, self.accounts = self.accounts, account_list
         self.settings_page.show_accounts(account_list)
@@ -275,10 +276,64 @@ class App(ctk.CTk):
             self.check_desktop_account(account_list)
         if relay_mcp.installed():
             self.update_relay_status(before, account_list)
+        # antes que el cambio automático: con la cuenta de Code liada, cswap decide mal
+        code_ok = self.check_code_account(account_list, unknown)
         if len(account_list) > 1 and state.mode() == "auto":
-            self.auto_switch()
+            if code_ok:
+                self.auto_switch()
             if desktop.installed():
                 self.desktop_auto_switch(account_list)
+
+    def check_code_account(self, account_list, unknown):
+        """Que Claude Code gaste de la cuenta que se ve en la app. Si su token es de una y su
+        ~/.claude.json dice otra (cswap, `claude auth status` y /usage se fían del segundo),
+        se gasta de una cuenta creyendo que es otra: se avisa y se vuelve a poner la elegida.
+        Devuelve si está bien (y se puede dejar decidir al cambio automático de cswap)."""
+        live = next((acc for acc in account_list if acc.get("active")), None)
+        wanted = (state.load_state().get("code_account") or "").lower() or None
+        if unknown and unknown != getattr(self, "unknown_warned", None):
+            self.unknown_warned = unknown  # una vez por cuenta
+            self.warn(f"Claude Code está gastando de {unknown}, que no está guardada en la "
+                      "app. Guárdala en Ajustes o vuelve a la tuya")
+        target = usage.code_repair(account_list, wanted)
+        if target is None:
+            if live and live.get("cswapActive"):
+                email = (live.get("email") or "").lower()
+                if email and email != wanted:
+                    # cambiada fuera de la app (cswap a mano, /login): a partir de ahora, esa
+                    log.info("Claude Code: ahora con %s", email)
+                    state.save_state(code_account=email)
+            return not unknown and (live is None or bool(live.get("cswapActive")))
+        now = time.time()
+        self.code_repairs = [t for t in getattr(self, "code_repairs", []) if now - t < 1800]
+        if self.code_repairs and now - self.code_repairs[-1] < 120:
+            return False  # se acaba de intentar: a ver si ha funcionado
+        if len(self.code_repairs) >= 3:
+            if not getattr(self, "repair_gave_up", False):
+                self.repair_gave_up = True
+                self.warn("Algo vuelve a cambiar la cuenta de Claude Code una y otra vez. "
+                          "Cierra todas las sesiones de Claude Code (VS Code, terminal y la "
+                          "app de escritorio) y vuelve a abrirlas")
+            return False
+        self.code_repairs.append(now)
+        self.repair_gave_up = False
+        name = usage.display_name(target)
+        if live is not target:
+            spending = usage.display_name(live) if live else (unknown or "otra cuenta")
+            self.warn(f"Claude Code estaba gastando de {spending}, no de {name}. "
+                      f"Lo vuelvo a poner en {name}")
+        else:
+            log.info("Claude Code: %s, pero ~/.claude.json decía otra; se arregla", name)
+        self.switch_to(target.get("number"), email=target.get("email"))
+        return False
+
+    def warn(self, message):
+        """Algo que hay que leer sí o sí: en rojo arriba un rato y como aviso de Windows."""
+        log.warning(message)
+        self.status_hold_until = time.time() + STATUS_HOLD
+        self.status.configure(text=message, text_color=RED)
+        if self.tray:
+            self.tray.notify(message)
 
     def show_fetched(self, account_list):
         if not account_list:
@@ -351,6 +406,8 @@ class App(ctk.CTk):
             if error:
                 self.status.configure(text=f"Cambio automático: {error}", text_color=RED)
             elif switched:
+                if switched.get("email"):
+                    state.save_state(code_account=switched["email"].lower())
                 if self.tray:
                     self.tray.notify(f"Cambiado a {switched.get('email', 'otra cuenta')}: "
                                      "la anterior estaba cerca del límite")
@@ -359,12 +416,16 @@ class App(ctk.CTk):
         threshold = state.setting("auto_threshold")
         self.run_in_background(lambda: accounts.auto_switch(threshold), done)
 
-    def switch_to(self, number, retries=SWITCH_RETRIES):
+    def switch_to(self, number, retries=SWITCH_RETRIES, email=None):
         if number is None:
             return
+        if email is None:
+            email = next((acc.get("email") for acc in self.accounts
+                          if acc.get("number") == number), None)
         if self.busy:  # se está leyendo el consumo: se cambia de cuenta en cuanto acabe
             if retries:
-                self.after(SWITCH_RETRY_MS, lambda: self.switch_to(number, retries - 1))
+                self.after(SWITCH_RETRY_MS,
+                           lambda: self.switch_to(number, retries - 1, email))
             else:
                 self.status.configure(text="No se pudo cambiar de cuenta: claude-swap no "
                                            "responde. Vuelve a intentarlo.", text_color=RED)
@@ -376,11 +437,13 @@ class App(ctk.CTk):
         def done(_result, error):
             self.busy = False
             if error:
-                self.status.configure(text=f"Error al cambiar: {error}", text_color=RED)
+                self.warn(f"No se pudo cambiar Claude Code: {error}")
             else:
+                if email:
+                    state.save_state(code_account=email.lower())
                 self.refresh_usage()
 
-        self.run_in_background(lambda: accounts.switch_account(number), done)
+        self.run_in_background(lambda: accounts.switch_account(number, email), done)
 
     def background_step(self, title, work, done_text):
         """Algo largo con cuentas (iniciar sesión, cambiar la app de escritorio): lo que va
@@ -556,9 +619,12 @@ def refresh_relay_entry():
 
 def read_accounts():
     """Las cuentas de cswap con lo que sabe la app de escritorio (qué cuenta usa y su
-    consumo, que se ve aunque cswap no pueda leerlo)."""
+    consumo, que se ve aunque cswap no pueda leerlo) y, en uso, la de Claude Code según su
+    token de verdad, no según cswap. Devuelve (cuentas, email del token si es de una cuenta
+    que no está guardada)."""
     account_list = accounts.list_accounts()
     if desktop.installed():
         latest = desktop.latest_samples(desktop.usage_samples())
         usage.add_desktop(account_list, latest, desktop.current_org())
-    return account_list
+    unknown = usage.apply_live(account_list, accounts.live_email())
+    return account_list, unknown
