@@ -9,6 +9,8 @@ RELOADED_NOTE = "recargado · el uso nuevo sale en unos minutos"
 # usageStatus de cswap cuando la sesión de Claude Code de la cuenta ya no vale
 RELOGIN = ("relogin_required", "token_expired", "no_credentials")
 EXPIRES_SOON_DAYS = 3
+# cswap pregunta cada 3-10 min; más que esto es que Anthropic no le deja (http 429)
+STALE_MINUTES = 20
 
 
 def parse_time(value):
@@ -34,6 +36,11 @@ def countdown(target, now=None):
     if h:
         return f"{h}h {m}m"
     return f"{m}m"
+
+
+def countdown_minutes(minutes):
+    h, m = divmod(minutes, 60)
+    return f"{h} h {m} min" if h else f"{m} min"
 
 
 def reset_label(target):
@@ -93,6 +100,51 @@ def add_desktop(accounts, latest, desktop_org):
             acc["usage"] = merged
             acc["usageFetchedAt"] = at.isoformat()
             acc["usageSource"] = "desktop"
+
+
+def apply_live(accounts, email):
+    """Claude Code gasta de la cuenta de su token (email), que puede no ser la que cree cswap
+    (lo saca de ~/.claude.json). Marca como en uso la del token y apunta en cswapActive la
+    que decía cswap. Devuelve el email del token si es de una cuenta que no está guardada
+    (entonces ninguna sale en uso), o None."""
+    if not email:
+        return None
+    email = email.lower()
+    live = next((acc for acc in accounts if (acc.get("email") or "").lower() == email), None)
+    for acc in accounts:
+        acc["cswapActive"] = bool(acc.get("active"))
+        acc["active"] = acc is live
+    return None if live else email
+
+
+def code_repair(accounts, wanted_email):
+    """Tras apply_live: la cuenta a la que hay que volver a poner Claude Code (con cswap),
+    o None si no hace falta.
+
+    Solo cuando el token y ~/.claude.json no dicen la misma cuenta: eso no lo hace nadie a
+    propósito. Cambiar con cswap o con /login cambia los dos a la vez, y eso se respeta.
+    Va a la última que se eligió (wanted_email) o, si no se sabe, a la que decía cswap."""
+    if not any("cswapActive" in acc for acc in accounts):
+        return None  # no se ha podido leer el token: no se toca nada a ciegas
+    live = next((acc for acc in accounts if acc.get("active")), None)
+    claimed = next((acc for acc in accounts if acc.get("cswapActive")), None)
+    if live is claimed:
+        return None
+    wanted = next((acc for acc in accounts
+                   if wanted_email and (acc.get("email") or "").lower() == wanted_email), None)
+    target = wanted or claimed
+    if target is None or needs_login(target):
+        return None
+    return target
+
+
+def stale_minutes(acc, now=None, limit=STALE_MINUTES):
+    """Minutos que tiene el dato de consumo si pasa de limit (None si es reciente)."""
+    fetched = parse_time(acc.get("usageFetchedAt"))
+    if not fetched:
+        return None
+    minutes = int(((now or datetime.now(timezone.utc)) - fetched).total_seconds() // 60)
+    return minutes if minutes >= limit else None
 
 
 def forget_past_windows(accounts, now):
@@ -176,6 +228,9 @@ def account_view(acc, now=None):
                    f"{DIAS[when.weekday()]} {when.day} {MESES[when.month - 1]} a las {when:%H:%M}.")
     elif acc.get("usageStatus") not in (None, "ok"):
         warning = f"⚠ cswap no puede leer el consumo ({acc.get('usageStatus')})"
+    elif stale_minutes(acc, now) is not None:
+        warning = (f"⚠ Dato de hace {countdown_minutes(stale_minutes(acc, now))}: Anthropic "
+                   "no deja preguntar más ahora. Puede ir más alto; se reintenta solo")
     elif week.get("willLastToReset") is False and not weekly_out:
         warning = "⚠ a este ritmo no llega al reinicio semanal"
     return {
