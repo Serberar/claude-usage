@@ -1,5 +1,7 @@
 # Claude Usage
 
+**Español** · [English](README.en.md)
+
 [![Pruebas](https://github.com/Serberar/claude-usage/actions/workflows/tests.yml/badge.svg)](https://github.com/Serberar/claude-usage/actions/workflows/tests.yml) [![Versión](https://img.shields.io/github/v/release/Serberar/claude-usage?label=versi%C3%B3n)](https://github.com/Serberar/claude-usage/releases/latest)
 
 Pequeña app de escritorio para Windows que muestra el consumo de tus cuentas de Claude Code sin tener que abrir el navegador.
