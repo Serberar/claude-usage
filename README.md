@@ -4,6 +4,8 @@
 
 Pequeña app de escritorio para Windows que muestra el consumo de tus cuentas de Claude Code sin tener que abrir el navegador.
 
+<p align="center"><img src="docs/uso.webp" width="420" alt="Pestaña Uso con cuentas de ejemplo"></p>
+
 Lee las cuentas que gestionas con [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) y para cada una enseña:
 
 - **Límite de 5 horas** y **límite semanal**: barras que se van llenando con el consumo (verde → amarillo → naranja → rojo).
