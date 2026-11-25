@@ -43,9 +43,9 @@ Todo en `%APPDATA%\ClaudeUsage`: los ajustes (`state.json`), el registro (`logs`
 
 ## Uso
 
-Descarga `ClaudeUsage-Setup.exe` desde [Releases](../../releases) y ábrelo. Se instala solo para tu usuario, sin permisos de administrador, y queda en el menú Inicio. No hace falta instalar Python. Se desinstala desde Configuración de Windows.
+Descarga el instalador desde [Releases](../../releases) y ábrelo. Se instala solo para tu usuario, sin permisos de administrador, y queda en el menú Inicio. No hace falta instalar Python. Se desinstala desde Configuración de Windows.
 
-Si prefieres no instalarla, `ClaudeUsage.exe` es la versión portable: se abre tal cual.
+Si prefieres no instalarla, en Releases también está la versión portable: se abre tal cual.
 
 Para que se abra sola al encender el ordenador, marca **Abrir al iniciar Windows** en la pestaña Ajustes: arrancará directamente en la bandeja.
 
@@ -77,8 +77,8 @@ El consumo lo pide claude-swap a Claude cada 3-10 minutos por cuenta (más a men
 | `prerequisites.py` | Instalar lo que falte (Claude Code, claude-swap, uv, Node) |
 | `claude_session.py` | Sesiones de Claude Code abiertas y reiniciarlas (sin tocar la app de escritorio) |
 | `desktop.py` | La app de escritorio: qué cuenta tiene, su consumo y cambiarla de cuenta |
-| `relay_mcp.py` | El relevo de conversaciones: servidor MCP para la app de escritorio (`ClaudeUsage.exe --relevo`) |
-| `updater.py`, `version.py`, `make_version_info.py` | Actualizarse sola desde GitHub, la versión y los metadatos del .exe |
+| `relay_mcp.py` | El relevo de conversaciones: servidor MCP para la app de escritorio (`ClaudeUsage --relevo`) |
+| `updater.py`, `version.py`, `make_version_info.py` | Actualizarse sola desde GitHub, la versión y los metadatos del ejecutable |
 | `windows.py`, `autostart.py` | Una sola instancia, icono junto al reloj, abrir al iniciar Windows |
 | `state.py`, `system.py` | Lo que se guarda (`state.json`) y ejecutar comandos o escribir sin dejar archivos a medias |
 
@@ -90,7 +90,7 @@ python tests.py
 
 No necesitan la interfaz ni tocar tus archivos (trabajan en carpetas temporales). GitHub Actions las pasa, con `ruff`, en cada push y pull request.
 
-## Compilar el .exe y el instalador
+## Compilar el ejecutable y el instalador
 
 Hace falta [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`).
 
@@ -99,14 +99,14 @@ pip install pyinstaller==6.22.3 -r requirements.txt
 .\build.ps1
 ```
 
-Deja `dist/ClaudeUsage.exe` y `dist/ClaudeUsage-Setup.exe` con la versión que pone `VERSION` en `version.py` (también va dentro del .exe, en Propiedades > Detalles).
+Deja en `dist/` el ejecutable y el instalador con la versión que pone `VERSION` en `version.py` (también va dentro del ejecutable, en Propiedades > Detalles).
 
 ## Publicar una versión
 
 1. Sube `VERSION` en `version.py` y haz commit.
 2. Crea y sube la etiqueta: `git tag v1.6.0` y `git push origin v1.6.0`.
-3. GitHub Actions pasa las pruebas, compila el .exe y el instalador, los firma si SignPath está configurado y deja una **release en borrador** con los dos archivos.
-4. Revisa el borrador en Releases y pulsa **Publish**. Solo entonces las copias instaladas la ven y se actualizan solas (usan `ClaudeUsage.exe`; el instalador es para quien la instala por primera vez).
+3. GitHub Actions pasa las pruebas, compila el ejecutable y el instalador, los firma si SignPath está configurado y deja una **release en borrador** con los dos archivos.
+4. Revisa el borrador en Releases y pulsa **Publish**. Solo entonces las copias instaladas la ven y se actualizan solas (usan la versión portable; el instalador es para quien la instala por primera vez).
 
 ## Code signing policy
 
