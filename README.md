@@ -2,13 +2,11 @@
 
 **Español** · [English](README.en.md)
 
-[![Pruebas](https://github.com/Serberar/claude-usage/actions/workflows/tests.yml/badge.svg)](https://github.com/Serberar/claude-usage/actions/workflows/tests.yml) [![Versión](https://img.shields.io/github/v/release/Serberar/claude-usage?label=versi%C3%B3n)](https://github.com/Serberar/claude-usage/releases/latest)
-
 Pequeña app de escritorio para Windows que muestra el consumo de tus cuentas de Claude Code sin tener que abrir el navegador.
 
 <p align="center"><img src="docs/uso.webp" width="420" alt="Pestaña Uso con cuentas de ejemplo"></p>
 
-Lee las cuentas que gestionas con [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) y para cada una enseña:
+Lee las cuentas que gestionas con claude-swap (`cswap`) y para cada una enseña:
 
 - **Límite de 5 horas** y **límite semanal**: barras que se van llenando con el consumo (verde → amarillo → naranja → rojo).
 - Cuándo se recarga cada límite y cuánto falta.
@@ -23,7 +21,7 @@ Las cuentas se detectan solas: si añades o quitas una con `cswap`, aparece o de
 
 Todo se maneja desde la propia ventana, sin terminal:
 
-- **Plugins**: las herramientas para gastar menos tokens que tienes instaladas. La app recomienda dos, [token-diet](https://github.com/Serberar/token-diet) y [RTK](https://github.com/rtk-ai/rtk), cada una con lo bueno y lo malo, si afecta a la calidad del código y cuánto ahorra. También enseña los plugins de Claude Code que hayas instalado por fuera. Se activan y desactivan con un botón, y se actualizan cuando hay una versión nueva. Una barra estima cuánto te ahorras con las que tienes activas.
+- **Plugins**: las herramientas para gastar menos tokens que tienes instaladas. La app recomienda dos, token-diet y RTK, cada una con lo bueno y lo malo, si afecta a la calidad del código y cuánto ahorra. También enseña los plugins de Claude Code que hayas instalado por fuera. Se activan y desactivan con un botón, y se actualizan cuando hay una versión nueva. Una barra estima cuánto te ahorras con las que tienes activas.
 - **Ajustes** (cada parte se despliega por separado):
   - **Tus cuentas**: si falta Claude Code o claude-swap, la app los descarga e instala. Desde ahí guardas la cuenta actual, añades otra (se abre el inicio de sesión de Claude), le pones un alias o la quitas. Con una sola cuenta funciona igual.
   - **Plugins**: instalar y desinstalar cada herramienta, cambiar su ficha y añadir otros plugins de Claude Code desde su repositorio de GitHub. Si alguna necesita algo más (Node, winget…), lo instala antes.
@@ -39,7 +37,7 @@ Todo en `%APPDATA%\ClaudeUsage`: los ajustes (`state.json`), el registro (`logs`
 ## Requisitos
 
 - Windows
-- Nada más: si falta Claude Code o [claude-swap](https://github.com/realiti4/claude-swap), la app los instala desde la pestaña Ajustes.
+- Nada más: si falta Claude Code o claude-swap, la app los instala desde la pestaña Ajustes.
 
 ## Uso
 
@@ -92,7 +90,7 @@ No necesitan la interfaz ni tocar tus archivos (trabajan en carpetas temporales)
 
 ## Compilar el ejecutable y el instalador
 
-Hace falta [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`).
+Hace falta Inno Setup 6 (`winget install JRSoftware.InnoSetup`).
 
 ```
 pip install pyinstaller==6.22.3 -r requirements.txt
@@ -110,10 +108,10 @@ Deja en `dist/` el ejecutable y el instalador con la versión que pone `VERSION`
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
-- Committers and reviewers: [Serberar](https://github.com/Serberar)
-- Approvers: [Serberar](https://github.com/Serberar)
+- Committers and reviewers: Serberar
+- Approvers: Serberar
 
 Solo se firman los archivos que compila GitHub Actions a partir de este repositorio (`.github/workflows/release.yml`), y cada firma la aprueba a mano el responsable del proyecto.
 
