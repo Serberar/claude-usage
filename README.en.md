@@ -10,6 +10,6 @@ Small Windows desktop app (Python) that shows how much of your Claude Code limit
 - Updates are verified against the published SHA-256 before installing.
 - Logs errors and account changes; never tokens or conversations.
 
-Download it from [Releases](https://github.com/Serberar/claude-usage/releases/latest). Tests: `python tests.py`.
+Download it from Releases. Tests: `python tests.py`.
 
 More details in the [Spanish README](README.md). [MIT](LICENSE) license.
